@@ -9,6 +9,7 @@
 
 ### Added
 
+- Added `/cd <path>` slash command to switch to another workspace (working directory), starting a fresh session rooted at the target directory.
 - `pi update` now lists each updated package with its npm version or git commit change, for example `npm:foo 1.2.0 -> 1.3.0`, and prints `Packages are already up to date` when nothing changed. When nothing changed but an update printed a warning, for example because npm left the old version installed after resolving stale registry metadata, it prints `No packages were updated, see the warnings above` instead; in offline mode it prints `Skipped package updates (offline mode)`. `PackageManager.update()` reports each changed package as a new `result` progress event whose `message` holds that line ([#11707](https://github.com/earendil-works/pi/pull/11707), [#11711](https://github.com/earendil-works/pi/pull/11711))
 - Anthropic sessions now use message threads: each request sends only the new messages and the server continues from the previous reply, falling back to the full request when the conversation changed (for example after compaction or a tool list change). On by default for the `anthropic` provider on `api.anthropic.com`; set `compat.supportsMessageThreads` in `models.json` to enable it for gateways that forward the `thread` field, or to turn it off. Cache warming does not touch the session's thread ([#11545](https://github.com/earendil-works/pi/pull/11545))
 - `pi.registerMarkdownTransformer()` takes an optional `{ messageTypes }` that selects the Markdown surfaces a transformer runs on. Besides user, assistant, and thinking Markdown, transformers can now opt into `custom` (custom messages and skill blocks), `summary` (branch and compaction summaries), and `changelog` (What's New, `/changelog`, the Extension Updates notice, and the Update Available note). Without options a transformer runs on user, assistant, and thinking Markdown as before. The built-in Mermaid renderer now also draws diagrams in expanded branch and compaction summaries
@@ -17,6 +18,7 @@
 
 ### Changed
 
+- Default auto-retry is now 10 attempts with a 1-minute backoff (`maxRetries: 10`, `baseDelayMs: 60000`), and `quota exceeded` errors are retryable.
 - The default model for the `anthropic` provider is now Claude Opus 5.5 (`claude-opus-5-5`) instead of Claude Opus 4.8
 - Default models moved to newer models at the same or a lower price: `amazon-bedrock` Claude Opus 5.5, `azure` GPT-6.1 Sol, `google` and `google-vertex` Gemini 4 Argon, `vercel-ai-gateway` GLM 5.3, `baseten` GLM 5.3, `minimax` and `minimax-cn` MiniMax-M3, `qwen-token-plan` and `qwen-token-plan-cn` Qwen3.8 Max, `opencode-go` Kimi K3.1 Pro, and Kimi K2.7 Code instead of Kimi K2.6 for `moonshotai`, `moonshotai-cn`, `huggingface`, `opencode`, `openrouter`, `cloudflare-workers-ai` and `cloudflare-ai-gateway`
 - `cacheWarming` now defaults to `"idle"` instead of `"streaming"`: pi also keeps eligible prompt caches warm for up to 30 minutes between agent runs, but only when a refresh is expected to pay for itself. Set `"cacheWarming": "streaming"` in global settings for the previous behavior
