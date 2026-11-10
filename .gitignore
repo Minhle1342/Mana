@@ -24,6 +24,14 @@ packages/ai/src/providers/.model-generation-*/
 *.swo
 *~
 
+# Temporary indices and server data
+.p2-test-data/
+apps/p2/.p2-test-data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+pi_tmp_idx_*
+
 # Package specific
 .npm/
 coverage/

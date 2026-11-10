@@ -34,6 +34,8 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "fork", description: "Create a new fork from a previous user message" },
 	{ name: "clone", description: "Duplicate the current session at the current position" },
 	{ name: "cd", description: "Switch to another workspace (working directory)", argumentHint: "<path>" },
+	{ name: "undo", description: "Undo workspace changes to the previous checkpoint" },
+	{ name: "revert", description: "Revert the previous undo and restore code changes" },
 	{
 		name: "tab",
 		description: "Manage session tabs (new, close, switch, next, prev, list)",

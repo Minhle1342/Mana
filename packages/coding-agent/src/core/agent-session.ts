@@ -66,6 +66,7 @@ import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import { generateBugReportSummary } from "./bug-report.ts";
 import type { CacheWarmer, CacheWarmingStatus } from "./cache-warmer.ts";
+import { CheckpointManager } from "./checkpoint-manager.ts";
 import {
 	type CompactionPreparation,
 	type CompactionResult,
@@ -333,6 +334,8 @@ export interface AgentSessionConfig {
 	extensionRunnerRef?: { current?: ExtensionRunner };
 	/** Session start event metadata emitted when extensions bind to this runtime. */
 	sessionStartEvent?: SessionStartEvent;
+	/** Checkpoint manager for workspace snapshots, undo, and revert. */
+	checkpointManager?: CheckpointManager;
 }
 
 export interface ExtensionBindings {
@@ -523,6 +526,7 @@ export class AgentSession {
 
 	private _modelRuntime: ModelRuntime;
 	private _cacheWarmer?: Pick<CacheWarmer, "cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed">;
+	private _checkpointManager: CheckpointManager;
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -548,6 +552,9 @@ export class AgentSession {
 		this._customTools = config.customTools ?? [];
 		this._cwd = config.cwd;
 		this._modelRuntime = config.modelRuntime;
+		this._checkpointManager =
+			config.checkpointManager ??
+			new CheckpointManager(this._cwd ?? this.sessionManager.getCwd(), this.sessionManager.getSessionId());
 		this._cacheWarmer = config.cacheWarmer;
 		if (this._cacheWarmer) {
 			this._cacheWarmer.onWarmed = (entry) => this._emit({ type: "entry_appended", entry });
@@ -584,6 +591,10 @@ export class AgentSession {
 
 	get modelRuntime(): ModelRuntime {
 		return this._modelRuntime;
+	}
+
+	get checkpointManager(): CheckpointManager {
+		return this._checkpointManager;
 	}
 
 	private async _getRequiredRequestAuth(
@@ -1978,6 +1989,10 @@ export class AgentSession {
 	private async _startRun(trigger: BeforeAgentStartTrigger, onStarted?: () => void): Promise<void> {
 		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
+		if (trigger.messageType === "user") {
+			const turnIndex = this.messages.filter((m) => m.role === "user").length + 1;
+			await this._checkpointManager.createCheckpoint(turnIndex).catch(() => {});
+		}
 		let messages: AgentMessage[];
 		try {
 			messages = await this._prepareRun(trigger);

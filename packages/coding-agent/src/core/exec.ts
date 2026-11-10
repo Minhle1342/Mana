@@ -20,6 +20,8 @@ export interface ExecOptions {
 	timeout?: number;
 	/** Working directory */
 	cwd?: string;
+	/** Environment variables to merge with process.env */
+	env?: NodeJS.ProcessEnv;
 	/**
 	 * Combined stdout/stderr byte limit; exceeding it terminates the command with `truncated: true`.
 	 * Nonnegative integer up to the runtime string limit. Default: 256 MiB, capped by that limit.
@@ -59,6 +61,7 @@ export async function execCommand(
 		cwd,
 		shell: false,
 		stdio: ["ignore", "pipe", "pipe"],
+		env: options?.env ? { ...process.env, ...options.env } : process.env,
 	});
 
 	let stdout = "";

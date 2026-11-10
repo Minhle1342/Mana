@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `/undo` and `/revert` slash commands to restore workspace changes to previous turn checkpoints and revert undo operations.
+
 ## [1.5.2] - 2026-11-10
 
 ### New Features

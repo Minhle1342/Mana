@@ -3937,6 +3937,55 @@ export class InteractiveMode {
 				}
 				return;
 			}
+			if (text === "/undo" || text.startsWith("/undo ")) {
+				this.editor.setText("");
+				if (this.session.isStreaming) {
+					this.showWarning("Wait for the current response to finish before undoing.");
+					return;
+				}
+				if (this.session.isCompacting) {
+					this.showWarning("Wait for compaction to finish before undoing.");
+					return;
+				}
+				if (this.session.isBashRunning) {
+					this.showWarning("Wait for the running command to finish before undoing.");
+					return;
+				}
+				const arg = text.startsWith("/undo ") ? text.slice(6).trim() : undefined;
+				this.clearStatusIndicator();
+				try {
+					const result = await this.session.checkpointManager.undoToCheckpoint(arg ? arg : undefined);
+					this.showStatus(
+						`Undid changes to checkpoint (+${result.revertDeleted} restored, -${result.revertAdded} removed). Use /revert to restore.`,
+					);
+				} catch (error: unknown) {
+					this.showError(`Failed to undo: ${error instanceof Error ? error.message : String(error)}`);
+				}
+				return;
+			}
+			if (text === "/revert") {
+				this.editor.setText("");
+				if (this.session.isStreaming) {
+					this.showWarning("Wait for the current response to finish before reverting.");
+					return;
+				}
+				if (this.session.isCompacting) {
+					this.showWarning("Wait for compaction to finish before reverting.");
+					return;
+				}
+				if (this.session.isBashRunning) {
+					this.showWarning("Wait for the running command to finish before reverting.");
+					return;
+				}
+				this.clearStatusIndicator();
+				try {
+					await this.session.checkpointManager.revertUndo();
+					this.showStatus("Reverted undo: code changes restored.");
+				} catch (error: unknown) {
+					this.showError(`Failed to revert: ${error instanceof Error ? error.message : String(error)}`);
+				}
+				return;
+			}
 			if (text === "/tree") {
 				this.showTreeSelector();
 				this.editor.setText("");
@@ -6505,7 +6554,7 @@ export class InteractiveMode {
 			if (error instanceof MissingSessionCwdError) {
 				switch (await this.promptForMissingSessionCwd(error)) {
 					case "continue": {
-						const result = await this.runtimeHost.switchSession(sessionPath, {
+						const result = await this.activeTabRuntime.switchSession(sessionPath, {
 							cwdOverride: error.issue.fallbackCwd,
 							withSession: options?.withSession,
 							projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
@@ -6519,16 +6568,6 @@ export class InteractiveMode {
 						this.showStatus("Resume cancelled");
 						return { cancelled: true };
 				}
-				const result = await this.activeTabRuntime.switchSession(sessionPath, {
-					cwdOverride: selectedCwd,
-					withSession: options?.withSession,
-					projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
-				});
-				if (result.cancelled) {
-					return result;
-				}
-				this.showStatus("Resumed session in current cwd");
-				return result;
 			}
 			return this.handleFatalRuntimeError("Failed to resume session", error);
 		}
@@ -6542,7 +6581,7 @@ export class InteractiveMode {
 	): Promise<{ cancelled: boolean }> {
 		const fork = SessionManager.forkFrom(sourcePath, cwd, this.sessionManager.getSessionDir());
 		const forkPath = fork.getSessionFile()!;
-		const result = await this.runtimeHost.switchSession(forkPath, {
+		const result = await this.activeTabRuntime.switchSession(forkPath, {
 			withSession: options?.withSession,
 			projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
 		});
@@ -7335,7 +7374,7 @@ export class InteractiveMode {
 			if (error instanceof MissingSessionCwdError) {
 				switch (await this.promptForMissingSessionCwd(error)) {
 					case "continue": {
-						const result = await this.runtimeHost.importFromJsonl(inputPath, error.issue.fallbackCwd);
+						const result = await this.activeTabRuntime.importFromJsonl(inputPath, error.issue.fallbackCwd);
 						this.showStatus(result.cancelled ? "Import cancelled" : `Session imported from: ${inputPath}`);
 						return;
 					}
@@ -7348,15 +7387,6 @@ export class InteractiveMode {
 						this.showStatus("Import cancelled");
 						return;
 				}
-				const runtime = this.tabManager?.getActiveTab()?.runtime ?? this.runtimeHost;
-				if (!runtime) throw new Error("No active runtime");
-				const result = await runtime.importFromJsonl(inputPath, selectedCwd);
-				if (result.cancelled) {
-					this.showStatus("Import cancelled");
-					return;
-				}
-				this.showStatus(`Session imported from: ${inputPath}`);
-				return;
 			}
 			if (error instanceof SessionImportFileNotFoundError) {
 				this.showError(`Failed to import session: ${error.message}`);
