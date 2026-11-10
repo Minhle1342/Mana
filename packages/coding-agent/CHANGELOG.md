@@ -50,6 +50,7 @@
 - Added syntax highlighting for Dart, Nix, Groovy, and Gradle files in read and write views ([#11643](https://github.com/earendil-works/pi/issues/11643))
 - Added GLM 5.3 to the Qwen Token Plan Individual model allowlist ([#11658](https://github.com/earendil-works/pi/issues/11658))
 - Added Claude Fable 5.2 (`claude-fable-5-2`) to the `anthropic` provider ($8/$40 per million input/output tokens, 1M context, 128K output). Like Fable 5.1 it uses per-message effort and mid-conversation system messages; requests its safety classifiers refuse before any output are answered by Claude Opus 5 through server-side fallback and billed at Opus 5's price. Claude Fable 5.2 and Mythos 5.2 on other providers, such as OpenRouter's `anthropic/claude-fable-5.2`, get the same per-message effort support
+- Interactive mode persists the session tabs of a workspace in `~/.pi/agent/tabs.json` and reopens them on the next start: tab order, names, working directories, and each tab's session. Starting with `--continue`, `--resume`, `--session`, `--fork`, `--session-id`, or `--no-session` selects a session explicitly and opens that single tab instead.
 
 ### Changed
 

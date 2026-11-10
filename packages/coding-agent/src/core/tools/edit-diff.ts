@@ -293,15 +293,59 @@ function countOccurrences(content: string, oldText: string): number {
 	return fuzzyContent.split(fuzzyOldText).length - 1;
 }
 
-function getNotFoundError(path: string, editIndex: number, totalEdits: number): Error {
-	if (totalEdits === 1) {
-		return new Error(
-			`Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`,
-		);
+/** Levenshtein distance between two strings, to rank file lines by closeness to a not-found `oldText`. */
+function editDistance(a: string, b: string): number {
+	let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+	for (let i = 1; i <= a.length; i++) {
+		const current = [i];
+		for (let j = 1; j <= b.length; j++) {
+			current[j] = Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+		}
+		previous = current;
 	}
-	return new Error(
-		`Could not find edits[${editIndex}] in ${path}. The oldText must match exactly including all whitespace and newlines.`,
-	);
+	return previous[b.length];
+}
+
+/** Cap on the number of closest lines shown in a not-found error, so a long `oldText` cannot flood it. */
+const MAX_CLOSEST_LINES = 8;
+
+/**
+ * The lines of `content` closest to a not-found `oldText`, each prefixed with its 1-based line
+ * number. The first non-empty line of `oldText` is compared (fuzzy-normalized) against every line
+ * and the best match is shown with the lines that follow it, so a wrong-indentation or slightly
+ * off edit can locate its place.
+ */
+function closestLinesInContent(content: string, oldText: string): string[] {
+	const lines = content.split("\n");
+	if (lines.length === 0) return [];
+	const targetLines = normalizeToLF(oldText).split("\n");
+	// Cap the needle: the cost is needle length x line count, and this only runs on the not-found path.
+	const needle = normalizeForFuzzyMatch(
+		targetLines.find((line) => line.trim().length > 0) ?? targetLines[0] ?? "",
+	).slice(0, 160);
+	let bestIndex = 0;
+	let bestDistance = Number.POSITIVE_INFINITY;
+	for (let i = 0; i < lines.length; i++) {
+		const distance = editDistance(needle, normalizeForFuzzyMatch(lines[i]).slice(0, 160));
+		if (distance < bestDistance) {
+			bestDistance = distance;
+			bestIndex = i;
+		}
+	}
+	// Show as many lines as the not-found text spans (at least one), capped so a long oldText
+	// cannot flood the error message.
+	const count = Math.max(1, Math.min(targetLines.length, MAX_CLOSEST_LINES));
+	const end = Math.min(bestIndex + count, lines.length);
+	return lines.slice(bestIndex, end).map((line, index) => `${bestIndex + 1 + index}: ${line}`);
+}
+
+function getNotFoundError(path: string, editIndex: number, totalEdits: number, closestLines: string[]): Error {
+	const base =
+		totalEdits === 1
+			? `Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`
+			: `Could not find edits[${editIndex}] in ${path}. The oldText must match exactly including all whitespace and newlines.`;
+	if (closestLines.length === 0) return new Error(base);
+	return new Error(`${base}\nThe closest lines in the file:\n${closestLines.join("\n")}`);
 }
 
 function getDuplicateError(path: string, editIndex: number, totalEdits: number, occurrences: number): Error {
@@ -365,7 +409,12 @@ export function applyEditsToNormalizedContent(
 		const edit = normalizedEdits[i];
 		const matchResult = fuzzyFindText(replacementBaseContent, edit.oldText);
 		if (!matchResult.found) {
-			throw getNotFoundError(path, i, normalizedEdits.length);
+			throw getNotFoundError(
+				path,
+				i,
+				normalizedEdits.length,
+				closestLinesInContent(normalizedContent, edit.oldText),
+			);
 		}
 
 		const occurrences = countOccurrences(replacementBaseContent, edit.oldText);

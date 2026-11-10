@@ -2372,7 +2372,8 @@ button.diff-number:hover {
 	gap: var(--s2);
 	margin-top: var(--s2);
 }
-.bubble.undoable {
+.bubble.undoable,
+.incoming-content.undoable {
 	cursor: pointer;
 }
 /* `@` and Tab file completion (p2 addition, src/web/file-completion.tsx): a list just above the textarea. */

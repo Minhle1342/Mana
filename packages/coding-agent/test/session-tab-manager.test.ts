@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
@@ -6,7 +9,7 @@ import { SessionTabManager } from "../src/core/session-tab-manager.ts";
 
 const cwd = process.cwd();
 
-function mockSession(modelName = "model-1"): AgentSession {
+function mockSession(modelName = "model-1", sessionFile?: string): AgentSession {
 	let currentModel = { id: modelName, provider: "test" } as unknown as Model<any>;
 	return {
 		cwd,
@@ -17,6 +20,7 @@ function mockSession(modelName = "model-1"): AgentSession {
 			currentModel = model;
 		}),
 		prompt: vi.fn(async (_text: string) => {}),
+		sessionManager: { getSessionFile: () => sessionFile },
 		isStreaming: false,
 		dispose: vi.fn(),
 		abort: vi.fn(),
@@ -48,8 +52,8 @@ function mockRuntime(initialCwd = cwd, initialModel = "model-1"): AgentSessionRu
 	} as unknown as AgentSessionRuntime;
 }
 
-function makeManager(onRuntimeCreated?: (runtime: AgentSessionRuntime, tabId: string) => void): SessionTabManager {
-	const createRuntimeFactory = vi.fn(async (options: { cwd: string }) => {
+function makeFactory() {
+	return vi.fn(async (options: { cwd: string }) => {
 		const session = mockSession();
 		return {
 			session,
@@ -63,9 +67,12 @@ function makeManager(onRuntimeCreated?: (runtime: AgentSessionRuntime, tabId: st
 			extensionsResult: undefined as unknown as never,
 		} as unknown as CreateAgentSessionRuntimeResult;
 	});
+}
+
+function makeManager(onRuntimeCreated?: (runtime: AgentSessionRuntime, tabId: string) => void): SessionTabManager {
 	return new SessionTabManager({
 		firstRuntime: mockRuntime(),
-		createRuntimeFactory,
+		createRuntimeFactory: makeFactory(),
 		agentDir: "/tmp/agent",
 		name: "Tab 1",
 		onRuntimeCreated,
@@ -239,5 +246,75 @@ describe("SessionTabManager", () => {
 		expect(manager.renameTab("nonexistent", "New Name")).toBe(false);
 		expect(manager.renameTab("tab-1", "   ")).toBe(false);
 		expect(manager.getTab("tab-1")?.name).toBe("Tab 1");
+	});
+
+	it("snapshots display order, names, cwds, session files, and the active index", async () => {
+		const manager = makeManager();
+		await manager.addTab({ cwd, name: "Docs" });
+		manager.renameTab("tab-2", "Notes");
+
+		expect(manager.getActiveIndex()).toBe(0);
+		expect(manager.snapshot()).toEqual({
+			tabs: [
+				{ name: "Tab 1", customName: false, cwd, sessionFile: null },
+				{ name: "Notes", customName: true, cwd, sessionFile: null },
+			],
+			activeIndex: 0,
+		});
+
+		await manager.switchTab("tab-2");
+		expect(manager.snapshot().activeIndex).toBe(1);
+	});
+
+	it("resumes the saved session file of a restored tab", async () => {
+		const agentDir = await mkdtemp(join(tmpdir(), "pi-tab-restore-"));
+		vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+		try {
+			const sessionFile = join(agentDir, "saved.jsonl");
+			await writeFile(sessionFile, "", "utf-8");
+			const createRuntimeFactory = makeFactory();
+			const manager = new SessionTabManager({
+				firstRuntime: mockRuntime(),
+				createRuntimeFactory,
+				agentDir,
+				name: "Tab 1",
+			});
+
+			await manager.addTab({ cwd: agentDir, name: "Restored", sessionFile });
+
+			const options = createRuntimeFactory.mock.calls[0]?.[0] as {
+				cwd: string;
+				sessionManager: { getSessionFile(): string | undefined; getCwd(): string };
+			};
+			expect(options.cwd).toBe(agentDir);
+			expect(options.sessionManager.getSessionFile()).toBe(sessionFile);
+			expect(options.sessionManager.getCwd()).toBe(agentDir);
+		} finally {
+			await rm(agentDir, { recursive: true, force: true });
+		}
+	});
+
+	it("starts a restored tab empty when its session file is gone", async () => {
+		const agentDir = await mkdtemp(join(tmpdir(), "pi-tab-gone-"));
+		vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+		try {
+			const missing = join(agentDir, "anymore", "gone.jsonl");
+			const createRuntimeFactory = makeFactory();
+			const manager = new SessionTabManager({
+				firstRuntime: mockRuntime(),
+				createRuntimeFactory,
+				agentDir,
+				name: "Tab 1",
+			});
+
+			await manager.addTab({ cwd: agentDir, name: "Restored", sessionFile: missing });
+
+			const options = createRuntimeFactory.mock.calls[0]?.[0] as unknown as {
+				sessionManager: { getSessionFile(): string | undefined };
+			};
+			expect(options.sessionManager.getSessionFile()).not.toBe(missing);
+		} finally {
+			await rm(agentDir, { recursive: true, force: true });
+		}
 	});
 });

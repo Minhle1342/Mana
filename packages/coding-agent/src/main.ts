@@ -1020,6 +1020,14 @@ export async function main(args: string[], options?: MainOptions) {
 			verbose: parsed.verbose,
 			tuiMode: parsed.tuiMode,
 			initialThemeSetting: parsed.useTheme,
+			// An explicit session selection owns the first tab; only a plain start reopens the saved layout.
+			restoreTabs:
+				parsed.session === undefined &&
+				parsed.resume === undefined &&
+				parsed.continue === undefined &&
+				parsed.fork === undefined &&
+				parsed.sessionId === undefined &&
+				parsed.noSession !== true,
 		});
 		if (startupBenchmark) {
 			await interactiveMode.init();

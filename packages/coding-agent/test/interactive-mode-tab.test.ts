@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Container, type TuiMouseEvent, VStack } from "@earendil-works/pi-tui";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
@@ -57,6 +60,22 @@ type InteractiveModeTabContext = {
 	showStatusIndicator: (indicator: StatusIndicatorFixture) => void;
 	rebindCurrentSession: (options?: { renderBeforeBind?: boolean }) => Promise<void>;
 	configureTabRuntime: (runtime: AgentSessionRuntime, tabId: string) => void;
+	tabState: {
+		load: (cwd: string) => PersistedWorkspaceFixture | undefined;
+		save: (cwd: string, layout: unknown) => void;
+	};
+	workspaceKey: string;
+	options: { restoreTabs?: boolean };
+	saveTabState: () => void;
+	restoreTabState: () => Promise<void>;
+	resumeFirstTabSession: (tab: PersistedWorkspaceFixture["tabs"][number]) => Promise<void>;
+	showWarning: (message: string) => void;
+};
+
+type PersistedWorkspaceFixture = {
+	tabs: { name: string; customName: boolean; cwd: string; sessionFile: string | null }[];
+	activeIndex: number;
+	updatedAt: string;
 };
 
 type StatusIndicatorFixture = { kind: string; dispose: () => void };
@@ -614,9 +633,13 @@ describe("InteractiveMode auto-retry across tabs", () => {
 		const context = Object.assign(Object.create(InteractiveMode.prototype), {
 			isInitialized: true,
 			retryUiByTab: new Map<string, TabRetryUiStateFixture>(),
+			tabState: { load: () => undefined, save: vi.fn() },
+			workspaceKey: "/work/a",
+			options: {},
 			tabManager: {
 				getAllTabs: () => tabs,
 				getActiveTab: () => tabs.find((tab) => tab.id === active.id),
+				snapshot: () => ({ tabs: [], activeIndex: 0 }),
 				switchTab: async (id: string) => {
 					active.id = id;
 					return true;
@@ -794,5 +817,244 @@ describe("InteractiveMode auto-retry across tabs", () => {
 		await rebind(replacement);
 
 		expect(replacement.subscribe).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("InteractiveMode tab state persistence", () => {
+	beforeEach(() => initTheme("dark"));
+
+	function savedWorkspace(overrides?: Partial<PersistedWorkspaceFixture>): PersistedWorkspaceFixture {
+		return {
+			tabs: [
+				{ name: "Tab 1", customName: false, cwd: "/work/a", sessionFile: "/sessions/a.jsonl" },
+				{ name: "Docs", customName: true, cwd: "/work/b", sessionFile: null },
+			],
+			activeIndex: 0,
+			updatedAt: "2026-11-10T00:00:00.000Z",
+			...overrides,
+		};
+	}
+
+	function createPersistenceContext(options: {
+		saved?: PersistedWorkspaceFixture;
+		restoreTabs?: boolean;
+		cwds: string[];
+		addTabError?: string;
+	}) {
+		const tabs = options.cwds.map((cwd, index) => createMockTab(`tab-${index + 1}`, `Tab ${index + 1}`, cwd));
+		const load = vi.fn(() => options.saved);
+		const save = vi.fn();
+		let failed = false;
+		const addTab = vi.fn(async (request: { cwd: string; name?: string; sessionFile?: string }) => {
+			if (options.addTabError !== undefined && !failed) {
+				failed = true;
+				throw new Error(options.addTabError);
+			}
+			const slot = createMockTab(`tab-${tabs.length + 1}`, request.name ?? "Restored", request.cwd);
+			tabs.push(slot);
+			return slot;
+		});
+		const switchTab = vi.fn(async () => {});
+		const showWarning = vi.fn();
+		const setupTabListeners = vi.fn();
+		const context = Object.assign(Object.create(InteractiveMode.prototype), {
+			options: { restoreTabs: options.restoreTabs },
+			tabState: { load, save },
+			workspaceKey: "/work/a",
+			tabManager: { getAllTabs: () => tabs, getActiveTab: () => undefined, addTab },
+			switchTab,
+			showWarning,
+			setupTabListeners,
+			refreshTabBar: vi.fn(),
+			ui: { requestRender: vi.fn() },
+		}) as InteractiveModeTabContext;
+		return { context, load, save, addTab, switchTab, showWarning, tabs };
+	}
+
+	it("does not read saved tabs unless the entry point opted in", async () => {
+		const { context, load } = createPersistenceContext({ saved: savedWorkspace(), cwds: ["/work/a"] });
+		await prototype.restoreTabState.call(context);
+		expect(load).not.toHaveBeenCalled();
+	});
+
+	it("restores saved tabs after the first and activates the saved index", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-restore-"));
+		try {
+			await mkdir(join(root, "b"), { recursive: true });
+			await mkdir(join(root, "c"), { recursive: true });
+			const { context, addTab, switchTab, tabs } = createPersistenceContext({
+				saved: savedWorkspace({
+					tabs: [
+						{ name: "Tab 1", customName: false, cwd: root, sessionFile: null },
+						{ name: "Docs", customName: true, cwd: join(root, "b"), sessionFile: "/sessions/b.jsonl" },
+						{ name: "Notes", customName: true, cwd: join(root, "c"), sessionFile: null },
+					],
+					activeIndex: 2,
+				}),
+				restoreTabs: true,
+				cwds: [root],
+			});
+
+			await prototype.restoreTabState.call(context);
+
+			expect(addTab).toHaveBeenCalledTimes(2);
+			expect(addTab).toHaveBeenNthCalledWith(1, {
+				cwd: join(root, "b"),
+				name: "Docs",
+				sessionFile: "/sessions/b.jsonl",
+			});
+			expect(addTab).toHaveBeenNthCalledWith(2, {
+				cwd: join(root, "c"),
+				name: "Notes",
+				sessionFile: undefined,
+			});
+			expect(switchTab).toHaveBeenCalledWith(tabs[2].id);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("skips a saved tab whose cwd is gone and keeps the rest", async () => {
+		const { context, addTab, showWarning } = createPersistenceContext({
+			saved: savedWorkspace({
+				tabs: [
+					{ name: "Tab 1", customName: false, cwd: "/work/a", sessionFile: null },
+					{ name: "Gone", customName: true, cwd: join(tmpdir(), "pi-tab-missing-dir"), sessionFile: null },
+				],
+			}),
+			restoreTabs: true,
+			cwds: ["/work/a"],
+		});
+		await prototype.restoreTabState.call(context);
+		expect(addTab).not.toHaveBeenCalled();
+		expect(showWarning).toHaveBeenCalledWith(expect.stringContaining("Gone"));
+	});
+
+	it("keeps restoring when one saved tab fails to open", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-restore-fail-"));
+		try {
+			await mkdir(join(root, "b"), { recursive: true });
+			await mkdir(join(root, "c"), { recursive: true });
+			const { context, addTab, showWarning, tabs } = createPersistenceContext({
+				saved: savedWorkspace({
+					tabs: [
+						{ name: "Tab 1", customName: false, cwd: root, sessionFile: null },
+						{ name: "Broken", customName: true, cwd: join(root, "b"), sessionFile: null },
+						{ name: "Notes", customName: true, cwd: join(root, "c"), sessionFile: null },
+					],
+				}),
+				restoreTabs: true,
+				cwds: [root],
+				addTabError: "boom",
+			});
+
+			await prototype.restoreTabState.call(context);
+
+			expect(addTab).toHaveBeenCalledTimes(2);
+			expect(showWarning).toHaveBeenCalledWith(expect.stringContaining("boom"));
+			expect(tabs).toHaveLength(2);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("saves the snapshot under the workspace key", () => {
+		const save = vi.fn();
+		const snapshot = { tabs: [], activeIndex: 0 };
+		const context = Object.assign(Object.create(InteractiveMode.prototype), {
+			tabState: { load: () => undefined, save },
+			workspaceKey: "/work/a",
+			tabManager: { snapshot: () => snapshot },
+			showWarning: vi.fn(),
+		}) as InteractiveModeTabContext;
+		prototype.saveTabState.call(context);
+		expect(save).toHaveBeenCalledWith("/work/a", snapshot);
+	});
+
+	it("warns instead of throwing when the layout cannot be saved", () => {
+		const showWarning = vi.fn();
+		const context = Object.assign(Object.create(InteractiveMode.prototype), {
+			tabState: {
+				load: () => undefined,
+				save: () => {
+					throw new Error("disk full");
+				},
+			},
+			workspaceKey: "/work/a",
+			tabManager: { snapshot: () => ({ tabs: [], activeIndex: 0 }) },
+			showWarning,
+		}) as InteractiveModeTabContext;
+		expect(() => prototype.saveTabState.call(context)).not.toThrow();
+		expect(showWarning).toHaveBeenCalledWith(expect.stringContaining("disk full"));
+	});
+});
+
+describe("InteractiveMode first tab restore", () => {
+	beforeEach(() => initTheme("dark"));
+
+	it("resumes the saved session in the tab the entry point created", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-first-tab-"));
+		try {
+			const sessionFile = join(root, "saved.jsonl");
+			const switchSession = vi.fn(async () => ({ cancelled: false }));
+			const context = Object.assign(Object.create(InteractiveMode.prototype), {
+				tabManager: {
+					getActiveTab: () => ({
+						runtime: {
+							switchSession,
+							session: { sessionManager: { getSessionFile: () => join(root, "fresh.jsonl") } },
+						},
+					}),
+				},
+				createProjectTrustContext: () => undefined,
+				showWarning: vi.fn(),
+			}) as unknown as InteractiveModeTabContext;
+
+			await writeFile(sessionFile, "", "utf-8");
+			await prototype.resumeFirstTabSession.call(context, {
+				name: "Tab 1",
+				customName: false,
+				cwd: root,
+				sessionFile,
+			});
+
+			expect(switchSession).toHaveBeenCalledWith(sessionFile, expect.objectContaining({}));
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the new session when the saved one cannot resume", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-first-tab-fail-"));
+		try {
+			const sessionFile = join(root, "saved.jsonl");
+			await writeFile(sessionFile, "", "utf-8");
+			const showWarning = vi.fn();
+			const context = Object.assign(Object.create(InteractiveMode.prototype), {
+				tabManager: {
+					getActiveTab: () => ({
+						runtime: {
+							switchSession: async () => {
+								throw new Error("locked");
+							},
+							session: { sessionManager: { getSessionFile: () => undefined } },
+						},
+					}),
+				},
+				createProjectTrustContext: () => undefined,
+				showWarning,
+			}) as unknown as InteractiveModeTabContext;
+
+			await prototype.resumeFirstTabSession.call(context, {
+				name: "Tab 1",
+				customName: false,
+				cwd: root,
+				sessionFile,
+			});
+
+			expect(showWarning).toHaveBeenCalledWith(expect.stringContaining("locked"));
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 });

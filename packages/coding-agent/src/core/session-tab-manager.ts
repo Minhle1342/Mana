@@ -7,12 +7,14 @@
  * prompt() on another. The manager tracks one active tab whose UI the host
  * renders.
  */
+import { existsSync } from "node:fs";
 import type { Model } from "@earendil-works/pi-ai";
 import type { AgentSession } from "./agent-session.ts";
 import type { AgentSessionRuntime, CreateAgentSessionRuntimeFactory } from "./agent-session-runtime.ts";
 import { createAgentSessionRuntime } from "./agent-session-runtime.ts";
 import type { SessionStartEvent } from "./extensions/index.ts";
 import { SessionManager } from "./session-manager.ts";
+import type { TabLayout } from "./tab-state.ts";
 
 export interface TabSlot {
 	id: string;
@@ -107,6 +109,25 @@ export class SessionTabManager {
 		await slot.session.setModel(model, { persist: false });
 	}
 
+	/** The index of the active tab, or 0 when none is set. */
+	getActiveIndex(): number {
+		const index = this.getAllTabs().findIndex((tab) => tab.id === this.activeId);
+		return index === -1 ? 0 : index;
+	}
+
+	/** The layout to persist: display order, names, cwds, session files, and the active index. */
+	snapshot(): TabLayout {
+		return {
+			tabs: this.getAllTabs().map((slot) => ({
+				name: slot.name,
+				customName: slot.isCustomNamed === true,
+				cwd: slot.cwd,
+				sessionFile: slot.session.sessionManager.getSessionFile() ?? null,
+			})),
+			activeIndex: this.getActiveIndex(),
+		};
+	}
+
 	getNextTabId(): string | undefined {
 		const all = this.getAllTabs();
 		if (all.length <= 1 || !this.activeId) return undefined;
@@ -125,12 +146,21 @@ export class SessionTabManager {
 		return all[prevIndex].id;
 	}
 
-	async addTab(options: { cwd: string; name?: string; sessionStartEvent?: SessionStartEvent }): Promise<TabSlot> {
+	async addTab(options: {
+		cwd: string;
+		name?: string;
+		sessionFile?: string;
+		sessionStartEvent?: SessionStartEvent;
+	}): Promise<TabSlot> {
 		const id = `tab-${this.nextTabNum++}`;
 		const defaultName = `Tab ${this.nextTabNum - 1}`;
 		const name = options.name ?? defaultName;
 		const isCustomNamed = options.name !== undefined && options.name !== defaultName;
-		const sessionManager = SessionManager.create(options.cwd);
+		// A restored tab resumes its session; a session file that vanished since the last run starts empty in its cwd.
+		const sessionManager =
+			options.sessionFile !== undefined && existsSync(options.sessionFile)
+				? SessionManager.open(options.sessionFile, undefined, options.cwd)
+				: SessionManager.create(options.cwd);
 		const runtime = await createAgentSessionRuntime(this.createRuntimeFactory, {
 			cwd: options.cwd,
 			agentDir: this.agentDir,

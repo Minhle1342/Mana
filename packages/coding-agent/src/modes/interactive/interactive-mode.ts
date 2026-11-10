@@ -125,6 +125,7 @@ import { SessionTabManager, type TabSlot } from "../../core/session-tab-manager.
 import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import { getSourcePackageKey, type SourceInfo } from "../../core/source-info.ts";
+import { type PersistedTab, TabStateStore } from "../../core/tab-state.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import { withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
@@ -460,6 +461,11 @@ export interface InteractiveModeOptions {
 	initialThemeSetting?: string;
 	/** Terminal implementation. Defaults to the current process terminal. */
 	terminal?: Terminal;
+	/**
+	 * Reopen the tab layout saved for this workspace. Only the entry point sets it: it passes `false`
+	 * when the invocation selected a session explicitly, and tests leave it unset so no file is read.
+	 */
+	restoreTabs?: boolean;
 }
 
 interface ExtensionChangelogUpdate {
@@ -483,6 +489,9 @@ interface TabRetryUiState {
 export class InteractiveMode {
 	private runtimeHost?: AgentSessionRuntime;
 	private tabManager!: SessionTabManager;
+	private tabState!: TabStateStore;
+	/** The workspace whose tab layout is saved; the launch cwd, which `/cd` must not move. */
+	private workspaceKey!: string;
 	private tabBar?: TabBar;
 	private renderer: TuiMainScreen | TuiAltScreen;
 	private ui: TUI;
@@ -664,6 +673,8 @@ export class InteractiveMode {
 
 	constructor(runtimeHost: AgentSessionRuntime, options: InteractiveModeOptions = {}) {
 		this.runtimeHost = runtimeHost;
+		this.tabState = new TabStateStore(runtimeHost.services.agentDir);
+		this.workspaceKey = runtimeHost.session.sessionManager.getCwd();
 		this.tabManager = new SessionTabManager({
 			firstRuntime: runtimeHost,
 			createRuntimeFactory: runtimeHost.createRuntimeFactory,
@@ -1193,6 +1204,9 @@ export class InteractiveMode {
 
 		// Initialize extensions first so resources are shown before messages
 		await this.rebindCurrentSession();
+
+		// Reopen the workspace's tabs after the first session is bound: their runtimes and the tab bar need it.
+		await this.restoreTabState();
 
 		// Render initial messages AFTER showing loaded resources
 		this.renderInitialMessages();
@@ -2319,6 +2333,8 @@ export class InteractiveMode {
 				await this.rebindCurrentSession({ renderBeforeBind: true });
 				this.themeController.applyFromSettings();
 			}
+			// `/cd`, `/new`, and `/resume` replace the session behind a tab: its cwd and file moved.
+			this.saveTabState();
 		});
 	}
 
@@ -2335,6 +2351,7 @@ export class InteractiveMode {
 					const sessionName = slot.session.sessionManager.getSessionName();
 					if (sessionName) {
 						this.tabManager.renameTab(slot.id, sessionName, false);
+						this.saveTabState();
 						this.refreshTabBar();
 						if (this.tabManager.getActiveTab()?.id === slot.id) {
 							this.updateTerminalTitle();
@@ -2390,6 +2407,7 @@ export class InteractiveMode {
 		await this.rebindCurrentSession({ renderBeforeBind: true });
 		const next = this.tabManager.getActiveTab();
 		if (next) this.attachTabRetryUi(next);
+		this.saveTabState();
 		this.refreshTabBar();
 		this.ui.requestRender();
 	}
@@ -2433,6 +2451,7 @@ export class InteractiveMode {
 				await this.rebindCurrentSession({ renderBeforeBind: true });
 			}
 		}
+		this.saveTabState();
 		this.refreshTabBar();
 		this.ui.requestRender();
 	}
@@ -2444,9 +2463,73 @@ export class InteractiveMode {
 		if (newName !== undefined && newName.trim().length > 0 && newName.trim() !== tab.name) {
 			this.tabManager.renameTab(id, newName);
 			tab.session.setSessionName?.(newName.trim());
+			this.saveTabState();
 			this.refreshTabBar();
 			this.updateTerminalTitle();
 			this.ui.requestRender();
+		}
+	}
+
+	/** Persist the tab layout for this workspace; a failed write never aborts the user's action. */
+	private saveTabState(): void {
+		try {
+			this.tabState.save(this.workspaceKey, this.tabManager.snapshot());
+		} catch (error: unknown) {
+			this.showWarning(`Could not save tabs: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	/**
+	 * Reopen the tab layout saved for this workspace. Each tab is restored independently: a tab
+	 * whose cwd or runtime fails is skipped with a warning, so restore never blocks startup.
+	 */
+	private async restoreTabState(): Promise<void> {
+		if (this.options.restoreTabs !== true) return;
+		const saved = this.tabState.load(this.workspaceKey);
+		if (!saved || saved.tabs.length === 0) return;
+		const [first, ...rest] = saved.tabs;
+		if (first) await this.resumeFirstTabSession(first);
+		for (const tab of rest) {
+			try {
+				if (!fs.existsSync(tab.cwd) || !fs.statSync(tab.cwd).isDirectory()) {
+					this.showWarning(`Skipped restored tab "${tab.name}": ${tab.cwd} is gone`);
+					continue;
+				}
+				const slot = await this.tabManager.addTab({
+					cwd: tab.cwd,
+					name: tab.name,
+					sessionFile: tab.sessionFile ?? undefined,
+				});
+				this.setupTabListeners(slot);
+			} catch (error: unknown) {
+				this.showWarning(
+					`Could not restore tab "${tab.name}": ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
+		const active = this.tabManager.getAllTabs()[saved.activeIndex];
+		if (active) await this.switchTab(active.id);
+		this.saveTabState();
+		this.refreshTabBar();
+		this.ui.requestRender();
+	}
+
+	/**
+	 * Resume the saved session in the tab the entry point already created, so a restored layout keeps its
+	 * first conversation too. A session that is gone or cannot open leaves the new session in place.
+	 */
+	private async resumeFirstTabSession(tab: PersistedTab): Promise<void> {
+		const runtime = this.tabManager.getActiveTab()?.runtime;
+		if (!runtime || tab.sessionFile === null || !fs.existsSync(tab.sessionFile)) return;
+		if (runtime.session.sessionManager.getSessionFile() === tab.sessionFile) return;
+		try {
+			await runtime.switchSession(tab.sessionFile, {
+				projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
+			});
+		} catch (error: unknown) {
+			this.showWarning(
+				`Could not resume tab "${tab.name}": ${error instanceof Error ? error.message : String(error)}`,
+			);
 		}
 	}
 
@@ -4957,6 +5040,9 @@ export class InteractiveMode {
 		// This prevents escape sequences from leaking to the parent shell over slow SSH.
 		this.themeController.disableAutoSync();
 		await this.ui.terminal.drainInput(1000);
+
+		// Last chance to keep the tab layout: the retry UI and runtimes die below.
+		this.saveTabState();
 
 		this.stop();
 		for (const slot of this.tabManager.getAllTabs()) {

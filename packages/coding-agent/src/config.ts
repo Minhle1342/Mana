@@ -675,6 +675,11 @@ export function getSessionsDir(): string {
 	return join(getAgentDir(), "sessions");
 }
 
+/** Get path to the saved tab layouts (tabs.json) */
+export function getTabsPath(agentDir: string = getAgentDir()): string {
+	return join(agentDir, "tabs.json");
+}
+
 /** Get path to debug log file */
 export function getDebugLogPath(): string {
 	return join(getAgentDir(), `${APP_NAME}-debug.log`);

@@ -321,6 +321,24 @@ describe("Coding Agent Tools", () => {
 			).rejects.toThrow(/Could not find the exact text/);
 		});
 
+		it("should list the closest lines when the text is not found", async () => {
+			const testFile = join(testDir, "edit-closest.txt");
+			const originalContent = "\t\tdismissRevert: ({ revertId }) =>\n\t\t\t\tworker().liveness.call(async () =>";
+			writeFileSync(testFile, originalContent);
+
+			await expect(
+				editTool.execute("test-call-6c", {
+					path: testFile,
+					edits: [
+						{
+							oldText: "\t\t\tdismissRevert: ({ revertId }) =>\n\t\t\t\tworker().liveness.call(async () =>",
+							newText: "X",
+						},
+					],
+				}),
+			).rejects.toThrow(/The closest lines in the file:[\s\S]*dismissRevert/);
+		});
+
 		it("should include ENOENT when the edit target does not exist", async () => {
 			const missingFile = join(testDir, "missing.txt");
 
