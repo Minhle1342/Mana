@@ -57,6 +57,7 @@ import { type Attachment, Attachments } from "../files/contract.ts";
 import { WorkerModels } from "../models/contract.ts";
 import { Sessions } from "../sessions/contract.ts";
 import { StatusReport } from "../status/contract.ts";
+import { WorkspaceBackend } from "../workspace/contract.ts";
 import {
 	Chat,
 	ChatCosts,
@@ -253,6 +254,11 @@ export default defineFacet((host) => {
 						text,
 						attachments: (files ?? []).map(({ id, name }) => ({ id, name })),
 					};
+					const tail = (await current.entries({}, 1, undefined, ctx)).items[0]?.id ?? 0;
+					void self
+						.get(WorkspaceBackend, { conversation: current.id })
+						.createCheckpoint({ entryId: tail + 1 }, ctx)
+						.catch(() => undefined);
 					const submission = await current.submit(
 						{
 							type: "input",

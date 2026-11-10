@@ -19,7 +19,6 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
 	// quota/billing error code; the other strings cover common gateway wording.
 	"insufficient_quota",
 	"out of budget",
-	"quota exceeded",
 	"billing",
 
 	// Sign in with ChatGPT: the subscription's shared usage limit, which resets
@@ -120,6 +119,9 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 
 	// gRPC based providers (e.g. NVIDIA NIM)
 	"ResourceExhausted",
+
+	// Quota exceeded is transient for the user's request: retry instead of failing fast.
+	"quota exceeded",
 
 	// Sign in with ChatGPT: usage or user data temporarily unavailable. Usage
 	// failures can arrive mid-stream without an HTTP 503 in the message.

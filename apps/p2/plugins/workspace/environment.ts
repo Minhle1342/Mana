@@ -55,6 +55,8 @@ export class Workspace {
 	/** Canonical directories the panel must never expose, such as pi-mobile's private data. */
 	private readonly denied: readonly string[];
 	private root?: string;
+	private readonly checkpoints = new Map<number, string>();
+	private readonly reverts = new Map<string, string>();
 
 	constructor(env: ExecutionEnv, denied: readonly string[]) {
 		this.env = env;
@@ -108,7 +110,7 @@ export class Workspace {
 		const canonical = await this.env.canonicalPath(absolute, context);
 		if (!canonical.ok) throw new Error(canonical.error.code === "not_found" ? "File not found" : "Cannot open path");
 		const inside = (base: string, value: string) =>
-			value === base || value.startsWith(base === "/" ? "/" : `${base}/`);
+			value === base || value.startsWith(base === "/" ? "/" : `${base}/`) || value.startsWith(`${base}\\`);
 		if (!inside(root, canonical.value)) throw new Error("Path leaves the working directory");
 		if (this.denied.some((denied) => inside(denied, canonical.value))) throw new Error("Path is private");
 	}
@@ -737,7 +739,14 @@ export class Workspace {
 	 * the command and is reported as truncated.
 	 */
 	/** `overrides`: filter overrides this request already fetched. */
-	private async git(args: string[], limit: number, context: Context, overrides?: Promise<string[]>, cwd?: string) {
+	private async git(
+		args: string[],
+		limit: number,
+		context: Context,
+		overrides?: Promise<string[]>,
+		cwd?: string,
+		extraEnv?: Record<string, string>,
+	) {
 		const filters = await (overrides ?? this.filterOverrides(context));
 		return this.capture(
 			[
@@ -758,6 +767,7 @@ export class Workspace {
 			limit,
 			context,
 			cwd,
+			extraEnv,
 		);
 	}
 
@@ -803,7 +813,13 @@ export class Workspace {
 		return pending;
 	}
 
-	private async capture(argv: string[], limit: number, context: Context, cwd?: string) {
+	private async capture(
+		argv: string[],
+		limit: number,
+		context: Context,
+		cwd?: string,
+		extraEnv?: Record<string, string>,
+	) {
 		const run = withCancel(context);
 		let stdout = "";
 		let stderr = "";
@@ -820,6 +836,7 @@ export class Workspace {
 					GIT_CONFIG_NOSYSTEM: "1",
 					GIT_PAGER: "cat",
 					LC_ALL: "C",
+					...extraEnv,
 				},
 				onOutput: (text, _context, info) => {
 					if (info.stream === "stderr") {
@@ -935,6 +952,169 @@ export class Workspace {
 		};
 		cover(root);
 		return targets;
+	}
+
+	private async createSnapshot(message: string, context: Context): Promise<string | undefined> {
+		const isGit = await this.git(["rev-parse", "--is-inside-work-tree"], 1024, context);
+		if (isGit.exitCode !== 0) return undefined;
+		const gitDirRun = await this.git(["rev-parse", "--git-dir"], 1024, context);
+		if (gitDirRun.exitCode !== 0) return undefined;
+		const gitDir = gitDirRun.stdout.trim();
+		const tempIndex = `${gitDir}/pi_tmp_idx_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+		const extraEnv = { GIT_INDEX_FILE: tempIndex };
+
+		const head = await this.git(["rev-parse", "HEAD"], 1024, context);
+		const headRef = head.exitCode === 0 ? head.stdout.trim() : undefined;
+
+		try {
+			if (headRef) {
+				await this.git(["read-tree", headRef], 1024, context, undefined, undefined, extraEnv);
+			}
+			await this.git(["add", "-A"], 1024, context, undefined, undefined, extraEnv);
+			const writeTree = await this.git(["write-tree"], 1024, context, undefined, undefined, extraEnv);
+			if (writeTree.exitCode !== 0) return headRef;
+
+			const tree = writeTree.stdout.trim();
+			const commitArgs = ["commit-tree", tree];
+			if (headRef) {
+				commitArgs.push("-p", headRef);
+			}
+			commitArgs.push("-m", message);
+			const commitRun = await this.git(commitArgs, 1024, context, undefined, undefined, extraEnv);
+			return commitRun.exitCode === 0 ? commitRun.stdout.trim() : headRef;
+		} finally {
+			const abs = await this.resolve(tempIndex, context).catch(() => undefined);
+			if (abs) await this.env.remove(abs, { force: true }, context).catch(() => undefined);
+		}
+	}
+
+	async createCheckpoint(entryId: number, context: Context): Promise<string | undefined> {
+		const ref = await this.createSnapshot(`checkpoint_${entryId}`, context);
+		if (ref) {
+			this.checkpoints.set(entryId, ref);
+			await this.git(["update-ref", `refs/p2/checkpoints/${entryId}`, ref], 1024, context).catch(() => undefined);
+		}
+		return ref;
+	}
+
+	private findCheckpoint(entryId: number): string | undefined {
+		if (this.checkpoints.has(entryId)) return this.checkpoints.get(entryId);
+		let candidateId = -1;
+		let candidateRef: string | undefined;
+		for (const [id, ref] of this.checkpoints.entries()) {
+			if (id <= entryId && id > candidateId) {
+				candidateId = id;
+				candidateRef = ref;
+			}
+		}
+		if (candidateRef) return candidateRef;
+		for (const ref of this.checkpoints.values()) {
+			return ref;
+		}
+		return undefined;
+	}
+
+	async getCheckpointDiff(
+		target: number | { entryId: number },
+		context: Context,
+	): Promise<{ hasCheckpoint: boolean; added: number; deleted: number }> {
+		const entryId = typeof target === "number" ? target : target.entryId;
+		const isGit = await this.git(["rev-parse", "--is-inside-work-tree"], 1024, context);
+		if (isGit.exitCode !== 0) return { hasCheckpoint: false, added: 0, deleted: 0 };
+		let checkpointRef = this.findCheckpoint(entryId);
+		if (!checkpointRef) {
+			const head = await this.git(["rev-parse", "HEAD"], 4096, context);
+			if (head.exitCode === 0) checkpointRef = head.stdout.trim();
+		}
+		if (!checkpointRef) return { hasCheckpoint: false, added: 0, deleted: 0 };
+
+		const currentRef = await this.createSnapshot("temp_diff_check", context);
+		if (!currentRef) return { hasCheckpoint: true, added: 0, deleted: 0 };
+
+		const run = await this.git(
+			["diff", "--numstat", "--no-color", "--ignore-submodules=dirty", checkpointRef, currentRef, "--", "."],
+			DIFF_BYTES,
+			context,
+		);
+		let addedLines = 0;
+		let deletedLines = 0;
+		if (run.exitCode === 0) {
+			const lines = run.stdout.split("\n").filter((l) => l.trim().length > 0);
+			for (const line of lines) {
+				const parts = line.split("\t");
+				if (parts.length >= 2) {
+					const add = Number.parseInt(parts[0] ?? "0", 10);
+					const del = Number.parseInt(parts[1] ?? "0", 10);
+					if (!Number.isNaN(add)) addedLines += add;
+					if (!Number.isNaN(del)) deletedLines += del;
+				}
+			}
+		}
+
+		return {
+			hasCheckpoint: true,
+			added: deletedLines,
+			deleted: addedLines,
+		};
+	}
+
+	async undoToCheckpoint(
+		target: number | { entryId: number },
+		context: Context,
+	): Promise<{ revertId: string; revertAdded: number; revertDeleted: number }> {
+		const entryId = typeof target === "number" ? target : target.entryId;
+		let checkpointRef = this.findCheckpoint(entryId);
+		if (!checkpointRef) {
+			const head = await this.git(["rev-parse", "HEAD"], 4096, context);
+			if (head.exitCode === 0) checkpointRef = head.stdout.trim();
+		}
+		if (!checkpointRef) throw new Error("No checkpoint found for undo");
+
+		const revertRef = (await this.createSnapshot(`revert_snapshot_${Date.now()}`, context)) ?? checkpointRef;
+
+		const diff = await this.git(
+			["diff", "--numstat", "--no-color", "--ignore-submodules=dirty", checkpointRef, revertRef, "--", "."],
+			DIFF_BYTES,
+			context,
+		);
+		let revertAdded = 0;
+		let revertDeleted = 0;
+		if (diff.exitCode === 0) {
+			const lines = diff.stdout.split("\n").filter((l) => l.trim().length > 0);
+			for (const line of lines) {
+				const parts = line.split("\t");
+				if (parts.length >= 2) {
+					const add = Number.parseInt(parts[0] ?? "0", 10);
+					const del = Number.parseInt(parts[1] ?? "0", 10);
+					if (!Number.isNaN(add)) revertAdded += add;
+					if (!Number.isNaN(del)) revertDeleted += del;
+				}
+			}
+		}
+
+		await this.git(["checkout", checkpointRef, "--", "."], 64 * 1024, context);
+		await this.git(["clean", "-fd"], 64 * 1024, context).catch(() => undefined);
+
+		const revertId = `revert_${Date.now()}`;
+		this.reverts.set(revertId, revertRef);
+		return { revertId, revertAdded, revertDeleted };
+	}
+
+	async revertUndo(target: string | { revertId: string }, context: Context): Promise<{ success: boolean }> {
+		const revertId = typeof target === "string" ? target : target.revertId;
+		const revertRef = this.reverts.get(revertId);
+		if (!revertRef) return { success: false };
+
+		await this.git(["checkout", revertRef, "--", "."], 64 * 1024, context);
+
+		this.reverts.delete(revertId);
+		return { success: true };
+	}
+
+	dismissRevert(target: string | { revertId: string }, _context?: Context): { success: boolean } {
+		const revertId = typeof target === "string" ? target : target.revertId;
+		this.reverts.delete(revertId);
+		return { success: true };
 	}
 }
 

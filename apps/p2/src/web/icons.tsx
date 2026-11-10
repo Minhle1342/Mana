@@ -247,3 +247,17 @@ export const HideIcon = () => (
 		<path d="M6 9l6 6 6-6" />
 	</Icon>
 );
+/** Undo code changes to earlier checkpoint. */
+export const UndoIcon = ({ size = 15 }: { size?: number }) => (
+	<Icon size={size}>
+		<path d="M9 14L4 9l5-5" />
+		<path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11" />
+	</Icon>
+);
+/** Redo / revert undone code changes. */
+export const RedoIcon = ({ size = 15 }: { size?: number }) => (
+	<Icon size={size}>
+		<path d="M15 14l5-5-5-5" />
+		<path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5v0A5.5 5.5 0 0 0 9.5 20H13" />
+	</Icon>
+);

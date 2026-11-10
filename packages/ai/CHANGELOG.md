@@ -20,6 +20,7 @@
 - Added `StreamOptions.disableContinuation`, which keeps a request from using or replacing server-side continuation state such as Anthropic message threads. Set it on requests that repeat an earlier one, such as cache warming ([#11545](https://github.com/earendil-works/pi/pull/11545))
 - Added the prompt cache warming policy as shared helpers, so every host warms the same way: `getPromptCacheTtlMs()`, `getCacheWarmingDelayMs()`, `isCacheWarmingReplayable()`, `getCacheWarmingRequestOptions()`, `evaluateCacheWarming()` and the `CACHE_WARMING_*` constants (moved from pi-coding-agent's cache warmer)
 - Added `@earendil-works/pi-ai/lazy-oauth` (`registerLazyOAuthFlows()`) and `@earendil-works/pi-ai/lazy-bedrock-provider` (`registerLazyBedrockProvider()`, built on the new `setBedrockProviderLoader()`) for Node bundles that split at dynamic imports: the OAuth login flows and Bedrock load through literal dynamic imports, so the bundler keeps them inside the bundle as chunks that load on first use, instead of through the variable-specifier imports that load pi-ai's own files at runtime. Nothing changes without calling them.
+- Added Google OAuth support ("Sign in with Google") to the `google` provider, enabling Google Pro subscription account sign-in and access to Gemini models.
 - Added Claude Fable 5.2 (`claude-fable-5-2`) to the `anthropic` provider ($8/$40 per million input/output tokens, 1M context, 128K output). Like Fable 5.1 it uses per-message effort and mid-conversation system messages; requests its safety classifiers refuse before any output are answered by Claude Opus 5 through server-side fallback and billed at Opus 5's price. Claude Fable 5.2 and Mythos 5.2 on other providers, such as OpenRouter's `anthropic/claude-fable-5.2`, get the same per-message effort support
 - Added `Provider.refreshModelsAuth`. Set it to `"configured"` for providers whose `refreshModels()` reads a catalog that needs no provider credential, such as pi.dev: `Models.refresh()` then still skips unconfigured providers, but no longer refreshes an expired OAuth token first, so a stale login (`invalid_grant`) no longer fails that provider's catalog refresh. `context.credential` is undefined in that network phase.
 - Added the `qwen-token-plan-individual-cn` provider for Qwen Token Plan Individual on the China endpoint, using `QWEN_TOKEN_PLAN_CN_API_KEY` ([#7989](https://github.com/earendil-works/pi/pull/7989) by [@bigoldcat123](https://github.com/bigoldcat123))
@@ -31,6 +32,7 @@
 ### Changed
 
 - Renamed the "OpenAI Codex (legacy)" provider back to "OpenAI Codex"
+- `isRetryableAssistantError` now retries `quota exceeded` errors instead of treating them as non-retryable provider limits.
 
 ### Fixed
 

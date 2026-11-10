@@ -118,12 +118,15 @@ describe("provider retry classification", () => {
 		).toBe(true);
 	});
 
-	it("keeps provider limit errors non-retryable", () => {
+	it("retries quota exceeded errors", () => {
 		expect(
 			isRetryableAssistantError(
 				fauxAssistantMessage("", { stopReason: "error", errorMessage: "429 quota exceeded" }),
 			),
-		).toBe(false);
+		).toBe(true);
+		expect(
+			isRetryableAssistantError(fauxAssistantMessage("", { stopReason: "error", errorMessage: "quota exceeded" })),
+		).toBe(true);
 	});
 
 	it("keeps the ChatGPT subscription usage limit non-retryable", () => {

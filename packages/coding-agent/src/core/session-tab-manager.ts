@@ -20,6 +20,7 @@ export interface TabSlot {
 	readonly cwd: string;
 	readonly session: AgentSession;
 	readonly runtime: AgentSessionRuntime;
+	isCustomNamed?: boolean;
 }
 
 export interface SessionTabManagerOptions {
@@ -43,10 +44,13 @@ export class SessionTabManager {
 		this.agentDir = options.agentDir;
 		this.onRuntimeCreated = options.onRuntimeCreated;
 		const { firstRuntime, name } = options;
+		firstRuntime.session.autoNameFirstTurn = true;
 		const id = `tab-${this.nextTabNum++}`;
+		const isCustomNamed = name !== undefined && name !== "Tab 1";
 		const slot: TabSlot = {
 			id,
 			name: name ?? "Tab 1",
+			isCustomNamed,
 			runtime: firstRuntime,
 			get cwd() {
 				return firstRuntime.cwd;
@@ -82,6 +86,17 @@ export class SessionTabManager {
 		return this.tabs.get(id);
 	}
 
+	renameTab(id: string, name: string, isCustom = true): boolean {
+		const slot = this.tabs.get(id);
+		const trimmed = name.trim();
+		if (!slot || trimmed.length === 0) return false;
+		slot.name = trimmed;
+		if (isCustom) {
+			slot.isCustomNamed = true;
+		}
+		return true;
+	}
+
 	getTabModel(id: string): Model<any> | undefined {
 		return this.tabs.get(id)?.session.model;
 	}
@@ -112,7 +127,9 @@ export class SessionTabManager {
 
 	async addTab(options: { cwd: string; name?: string; sessionStartEvent?: SessionStartEvent }): Promise<TabSlot> {
 		const id = `tab-${this.nextTabNum++}`;
-		const name = options.name ?? `Tab ${this.nextTabNum - 1}`;
+		const defaultName = `Tab ${this.nextTabNum - 1}`;
+		const name = options.name ?? defaultName;
+		const isCustomNamed = options.name !== undefined && options.name !== defaultName;
 		const sessionManager = SessionManager.create(options.cwd);
 		const runtime = await createAgentSessionRuntime(this.createRuntimeFactory, {
 			cwd: options.cwd,
@@ -120,12 +137,14 @@ export class SessionTabManager {
 			sessionManager,
 			sessionStartEvent: options.sessionStartEvent,
 		});
+		runtime.session.autoNameFirstTurn = true;
 		if (this.onRuntimeCreated) {
 			this.onRuntimeCreated(runtime, id);
 		}
 		const slot: TabSlot = {
 			id,
 			name,
+			isCustomNamed,
 			runtime,
 			get cwd() {
 				return runtime.cwd;

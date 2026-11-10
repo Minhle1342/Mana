@@ -28,6 +28,8 @@ export const ReplyTo = createContext<((target: { entryId: number; name: string }
 export const BranchFrom = createContext<((entryId: number) => void) | undefined>(undefined);
 /** Loads older history until an entry is retained; false when the conversation has no such entry. */
 export const RevealEntry = createContext<((entryId: number) => Promise<boolean>) | undefined>(undefined);
+/** Undoes code changes to the checkpoint before this turn entry. */
+export const UndoCheckpointContext = createContext<((entryId: number) => void) | undefined>(undefined);
 
 /** A path as the session sees it: relative to its working directory when inside it. */
 export function relativePath(cwd: string | undefined, path: string): string {

@@ -77,6 +77,25 @@ export const WorkspaceBackend = local("p2.workspace-backend", {
 		query: method(QuerySchema, Result),
 		read: method(Read, unsafe<WorkspaceBytes>(unknown())),
 		write: method(WriteSchema),
+		createCheckpoint: method(obj({ entryId: int({ minimum: 0 }) })),
+		getCheckpointDiff: method(
+			obj({ entryId: int({ minimum: 0 }) }),
+			obj({
+				hasCheckpoint: bool(),
+				added: int({ minimum: 0 }),
+				deleted: int({ minimum: 0 }),
+			}),
+		),
+		undoToCheckpoint: method(
+			obj({ entryId: int({ minimum: 0 }) }),
+			obj({
+				revertId: str({ minLength: 1 }),
+				revertAdded: int({ minimum: 0 }),
+				revertDeleted: int({ minimum: 0 }),
+			}),
+		),
+		revertUndo: method(obj({ revertId: str({ minLength: 1 }) }), obj({ success: bool() })),
+		dismissRevert: method(obj({ revertId: str({ minLength: 1 }) }), obj({ success: bool() })),
 	},
 });
 
@@ -99,6 +118,38 @@ export const WorkspaceTransfer = remote("p2.workspace-transfer", {
 			methods: {
 				read: method(Read, unsafe<WorkspaceBytes>(unknown())),
 				write: method(WriteSchema),
+			},
+		},
+	},
+});
+
+/** Checkpoints and undo/revert code state for conversation turns. */
+export const SessionCheckpoints = remote("p2.checkpoints", {
+	version: 1,
+	params: Input,
+	hostAddress: sessionHost,
+	variants: {
+		owner: {
+			state: {},
+			methods: {
+				getDiff: method(
+					obj({ entryId: int({ minimum: 0 }) }),
+					obj({
+						hasCheckpoint: bool(),
+						added: int({ minimum: 0 }),
+						deleted: int({ minimum: 0 }),
+					}),
+				),
+				undo: method(
+					obj({ entryId: int({ minimum: 0 }) }),
+					obj({
+						revertId: str({ minLength: 1 }),
+						revertAdded: int({ minimum: 0 }),
+						revertDeleted: int({ minimum: 0 }),
+					}),
+				),
+				revert: method(obj({ revertId: str({ minLength: 1 }) }), obj({ success: bool() })),
+				dismissRevert: method(obj({ revertId: str({ minLength: 1 }) }), obj({ success: bool() })),
 			},
 		},
 	},

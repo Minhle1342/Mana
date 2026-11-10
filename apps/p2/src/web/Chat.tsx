@@ -24,7 +24,14 @@ import {
 import { Results } from "./activity/Results.tsx";
 import { handoff, type SlotHeights, SlotHeightsContext } from "./activity/ThoughtSlot.tsx";
 import { CopyButton } from "./Code.tsx";
-import { BranchFrom, OpenConversation, OpenPeerConversation, ReplyTo, RevealEntry } from "./chat-context.ts";
+import {
+	BranchFrom,
+	OpenConversation,
+	OpenPeerConversation,
+	ReplyTo,
+	RevealEntry,
+	UndoCheckpointContext,
+} from "./chat-context.ts";
 import {
 	AlertIcon,
 	BotIcon,
@@ -34,6 +41,7 @@ import {
 	PencilIcon,
 	ReplyIcon,
 	SparkIcon,
+	UndoIcon,
 	UsersIcon,
 } from "./icons.tsx";
 import { imageSize } from "./image-size.ts";
@@ -99,6 +107,7 @@ export {
 	relativePath,
 	SessionId,
 	ToolActivityContext,
+	UndoCheckpointContext,
 	WorkingDirectory,
 } from "./chat-context.ts";
 
@@ -471,15 +480,27 @@ function UserMessage({ item }: { item: Extract<Item, { type: "user" }> }) {
 	const reveal = useContext(RevealEntry);
 	const reply = useReply(item.author ? item.entryId : undefined, item.author?.name ?? "");
 	const branch = useContext(BranchFrom);
+	const undoCheckpoint = useContext(UndoCheckpointContext);
 	// Only what reached the agent can be edited: a chat message (chat mode) is not part of its history.
 	const entryId = item.chat ? undefined : item.entryId;
 	const edit = branch && entryId !== undefined;
+	const canUndo = undoCheckpoint && entryId !== undefined;
 	const text = item.text.trim();
 	return (
 		<div className={`user ${item.chat ? "chat-message" : ""}`} data-entry={item.entryId}>
 			<div className="user-line">
 				{reply.button}
-				<div className="bubble" {...reply.gesture}>
+				{/* biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: the undo button in message-actions is the keyboard control. */}
+				<div
+					className={`bubble${canUndo ? " undoable" : ""}`}
+					{...reply.gesture}
+					onClick={(e) => {
+						if (!canUndo) return;
+						if ((e.target as HTMLElement).closest("button, a, img")) return;
+						if (window.getSelection()?.toString()) return;
+						undoCheckpoint(entryId);
+					}}
+				>
 					{item.replyTo && (
 						<button
 							type="button"
@@ -510,9 +531,20 @@ function UserMessage({ item }: { item: Extract<Item, { type: "user" }> }) {
 				</div>
 			</div>
 			{/* Sent messages only: a queued one has neither its entry nor its time yet. */}
-			{item.entryId !== undefined && (text || item.at !== undefined || edit) && (
+			{item.entryId !== undefined && (text || item.at !== undefined || edit || canUndo) && (
 				<div className="message-actions">
 					{item.at !== undefined && <Time at={item.at} className="message-time" />}
+					{canUndo && (
+						<button
+							type="button"
+							className="copy"
+							aria-label="Undo"
+							title="Undo: restore code changes to checkpoint before this message"
+							onClick={() => undoCheckpoint(entryId)}
+						>
+							<UndoIcon />
+						</button>
+					)}
 					{edit && (
 						<button
 							type="button"

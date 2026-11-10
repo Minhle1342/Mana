@@ -2285,6 +2285,96 @@ button.diff-number:hover {
 	border-top: 1px solid var(--line);
 	border-bottom: 1px solid var(--line);
 }
+/* Checkpoint undo and revert banner */
+.revert-banner {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	width: var(--chat-size);
+	max-width: var(--chat-width);
+	margin: 0 auto var(--s2);
+	padding: var(--s2) var(--s3);
+	border: 1px solid var(--text);
+	border-radius: var(--radius);
+	background: var(--hover);
+	animation: rise 0.2s ease-out;
+}
+.revert-banner-button {
+	display: flex;
+	align-items: center;
+	gap: var(--s2);
+	flex: 1;
+	background: none;
+	border: none;
+	padding: 0;
+	color: var(--text);
+	font: inherit;
+	font-size: var(--fs-sm);
+	font-weight: var(--fw-medium);
+	cursor: pointer;
+	text-align: left;
+}
+.revert-banner-icon {
+	display: grid;
+	place-items: center;
+	color: var(--text);
+}
+.revert-banner-label {
+	color: var(--text);
+	font-weight: var(--fw-strong);
+}
+.revert-banner-button:hover .revert-banner-label {
+	text-decoration: underline;
+}
+.revert-banner-close {
+	display: grid;
+	place-items: center;
+	background: none;
+	border: none;
+	padding: var(--s1);
+	color: var(--muted);
+	cursor: pointer;
+	border-radius: var(--radius);
+}
+.revert-banner-close:hover {
+	color: var(--text);
+	background: var(--line);
+}
+.diff-badge {
+	display: inline-flex;
+	align-items: center;
+	padding: 0 var(--s2);
+	border-radius: var(--radius);
+	font-family: var(--mono);
+	font-size: var(--fs-xs);
+	font-weight: var(--fw-strong);
+	font-variant-numeric: tabular-nums;
+	line-height: 1.6;
+}
+.diff-badge.add {
+	background: var(--add);
+	color: var(--add-ink);
+}
+.diff-badge.del {
+	background: var(--del);
+	color: var(--del-ink);
+}
+.undo-modal-diff {
+	display: flex;
+	align-items: center;
+	gap: var(--s2);
+	margin: var(--s2) 0;
+}
+.button-row {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: var(--s2);
+	margin-top: var(--s2);
+}
+.bubble.undoable {
+	cursor: pointer;
+}
 /* `@` and Tab file completion (p2 addition, src/web/file-completion.tsx): a list just above the textarea. */
 .file-completion {
 	display: flex;

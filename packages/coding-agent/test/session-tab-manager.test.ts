@@ -209,4 +209,35 @@ describe("SessionTabManager", () => {
 		await manager.addTab({ cwd, name: "Tab 2" });
 		expect(onCreated).toHaveBeenCalledWith(expect.anything(), "tab-2");
 	});
+
+	it("renames an existing tab and trims the name", () => {
+		const manager = makeManager();
+		expect(manager.getTab("tab-1")?.isCustomNamed).toBe(false);
+		expect(manager.renameTab("tab-1", "  Renamed Tab  ")).toBe(true);
+		expect(manager.getTab("tab-1")?.name).toBe("Renamed Tab");
+		expect(manager.getTab("tab-1")?.isCustomNamed).toBe(true);
+	});
+
+	it("preserves isCustomNamed when renameTab is called with isCustom = false", () => {
+		const manager = makeManager();
+		expect(manager.getTab("tab-1")?.isCustomNamed).toBe(false);
+		expect(manager.renameTab("tab-1", "Auto Name", false)).toBe(true);
+		expect(manager.getTab("tab-1")?.name).toBe("Auto Name");
+		expect(manager.getTab("tab-1")?.isCustomNamed).toBe(false);
+	});
+
+	it("flags isCustomNamed when tab is created with explicit name", async () => {
+		const manager = makeManager();
+		const tab2 = await manager.addTab({ cwd, name: "Custom Tab 2" });
+		expect(tab2.isCustomNamed).toBe(true);
+		const tab3 = await manager.addTab({ cwd });
+		expect(tab3.isCustomNamed).toBe(false);
+	});
+
+	it("rejects renaming with invalid id or blank name", () => {
+		const manager = makeManager();
+		expect(manager.renameTab("nonexistent", "New Name")).toBe(false);
+		expect(manager.renameTab("tab-1", "   ")).toBe(false);
+		expect(manager.getTab("tab-1")?.name).toBe("Tab 1");
+	});
 });

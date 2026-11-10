@@ -468,6 +468,18 @@ interface ExtensionChangelogUpdate {
 	markdown: string;
 }
 
+/** Per-tab auto-retry UI state: the editor Escape handler and indicator this tab owns. */
+interface TabRetryUiState {
+	/** An auto-retry is in flight, so this tab owns the editor's Escape handler. */
+	autoRetry: boolean;
+	/** Editor Escape handler to restore when this tab stops owning it. */
+	onEscape?: () => void;
+	/** Retry indicator owned by this tab; mounted only while the tab is active. */
+	indicator?: RetryStatusIndicator;
+	/** Retry that started while the tab was in the background; becomes the indicator on attach. */
+	pendingRetry?: { attempt: number; maxAttempts: number; delayMs: number };
+}
+
 export class InteractiveMode {
 	private runtimeHost?: AgentSessionRuntime;
 	private tabManager!: SessionTabManager;
@@ -563,8 +575,9 @@ export class InteractiveMode {
 	// Auto-compaction state
 	private autoCompactionEscapeHandler?: () => void;
 
-	// Auto-retry state
-	private retryEscapeHandler?: () => void;
+	// Per-tab auto-retry UI state. Retry itself lives in each tab's AgentSession, so
+	// the Escape handler and the indicator must not leak between tabs.
+	private readonly retryUiByTab = new Map<string, TabRetryUiState>();
 
 	// Messages queued while compaction is running
 	private compactionQueuedMessages: CompactionQueuedMessage[] = [];
@@ -1023,6 +1036,9 @@ export class InteractiveMode {
 			onSwitch: (id) => void this.switchTab(id),
 			onAdd: () => void this.addTab(),
 			onClose: (id) => void this.closeTab(id),
+			onRename: (id) => void this.promptRenameTab(id),
+			requestRender: () => this.ui.requestRender(),
+			addInputListener: (listener) => this.ui.addInputListener(listener),
 		});
 		this.tabBarContainer = new Container();
 		this.tabBarContainer.addChild(this.tabBar);
@@ -2285,19 +2301,20 @@ export class InteractiveMode {
 		this.updateTerminalTitle();
 	}
 
-	private configureTabRuntime(runtime: AgentSessionRuntime, _tabId: string): void {
+	private configureTabRuntime(runtime: AgentSessionRuntime, tabId: string): void {
 		runtime.setBeforeSessionInvalidate(() => {
+			// The tab's session is being replaced or disposed: its retry UI dies with it.
+			this.resetTabRetryUi(tabId);
 			if (this.tabManager?.getActiveTab()?.runtime === runtime) {
 				this.resetExtensionUI();
 			}
 		});
 		runtime.setRebindSession(async (newSession) => {
-			newSession.subscribe(async (event) => {
-				if (event.type === "agent_start" || event.type === "agent_end" || event.type === "agent_settled") {
-					this.refreshTabBar();
-					this.ui.requestRender();
-				}
-			});
+			newSession.autoNameFirstTurn = true;
+			// Re-attach the tab listeners to the replacement session so a background
+			// tab still reports its retry lifecycle.
+			const slot = this.tabManager?.getTab(tabId);
+			if (slot) this.setupTabListeners(slot);
 			if (this.tabManager?.getActiveTab()?.runtime === runtime) {
 				await this.rebindCurrentSession({ renderBeforeBind: true });
 				this.themeController.applyFromSettings();
@@ -2307,7 +2324,46 @@ export class InteractiveMode {
 
 	private setupTabListeners(slot: TabSlot): void {
 		slot.session.subscribe(async (event) => {
+			if (event.type === "agent_start") this.resetTabRetryUi(slot.id);
 			if (event.type === "agent_start" || event.type === "agent_end" || event.type === "agent_settled") {
+				this.refreshTabBar();
+				this.ui.requestRender();
+				return;
+			}
+			if (event.type === "session_info_changed") {
+				if (!slot.isCustomNamed) {
+					const sessionName = slot.session.sessionManager.getSessionName();
+					if (sessionName) {
+						this.tabManager.renameTab(slot.id, sessionName, false);
+						this.refreshTabBar();
+						if (this.tabManager.getActiveTab()?.id === slot.id) {
+							this.updateTerminalTitle();
+						}
+						this.ui.requestRender();
+					}
+				}
+				return;
+			}
+			// The active tab's retry UI is owned by handleEvent; a background tab keeps
+			// its own state so switching to it restores the indicator and Escape.
+			if (this.tabManager.getActiveTab()?.id === slot.id) return;
+			if (event.type === "auto_retry_start" || event.type === "summarization_retry_scheduled") {
+				const state = this.getTabRetryState(slot.id);
+				state.autoRetry = event.type === "auto_retry_start";
+				// Park the parameters instead of building an animated indicator nobody sees.
+				state.pendingRetry = {
+					attempt: event.attempt,
+					maxAttempts: event.maxAttempts,
+					delayMs: event.delayMs,
+				};
+				this.refreshTabBar();
+				this.ui.requestRender();
+			} else if (
+				event.type === "auto_retry_end" ||
+				event.type === "summarization_retry_attempt_start" ||
+				event.type === "summarization_retry_finished"
+			) {
+				this.resetTabRetryUi(slot.id);
 				this.refreshTabBar();
 				this.ui.requestRender();
 			}
@@ -2327,9 +2383,13 @@ export class InteractiveMode {
 
 	/** Switch the UI to render another tab's session. */
 	private async switchTab(id: string): Promise<void> {
+		const previous = this.tabManager.getActiveTab();
 		const switched = await this.tabManager.switchTab(id);
 		if (!switched) return;
+		if (previous) this.detachTabRetryUi(previous.id);
 		await this.rebindCurrentSession({ renderBeforeBind: true });
+		const next = this.tabManager.getActiveTab();
+		if (next) this.attachTabRetryUi(next);
 		this.refreshTabBar();
 		this.ui.requestRender();
 	}
@@ -2365,6 +2425,7 @@ export class InteractiveMode {
 			return;
 		}
 		const wasActive = this.tabManager.getActiveTab()?.id === id;
+		this.resetTabRetryUi(id);
 		await this.tabManager.removeTab(id);
 		if (wasActive) {
 			const active = this.tabManager.getActiveTab();
@@ -2374,6 +2435,19 @@ export class InteractiveMode {
 		}
 		this.refreshTabBar();
 		this.ui.requestRender();
+	}
+
+	private async promptRenameTab(id: string): Promise<void> {
+		const tab = this.tabManager.getTab(id);
+		if (!tab) return;
+		const newName = await this.showExtensionInput("Rename Tab", tab.name, { initialValue: tab.name });
+		if (newName !== undefined && newName.trim().length > 0 && newName.trim() !== tab.name) {
+			this.tabManager.renameTab(id, newName);
+			tab.session.setSessionName?.(newName.trim());
+			this.refreshTabBar();
+			this.updateTerminalTitle();
+			this.ui.requestRender();
+		}
 	}
 
 	private findTabBySpec(spec: string): TabSlot | undefined {
@@ -2457,13 +2531,48 @@ export class InteractiveMode {
 			return;
 		}
 
+		if (subcommand === "rename") {
+			if (parts.length === 2) {
+				const active = this.tabManager.getActiveTab();
+				if (!active) return;
+				const newName = parts[1];
+				this.tabManager.renameTab(active.id, newName);
+				active.session.setSessionName?.(newName.trim());
+				this.refreshTabBar();
+				this.updateTerminalTitle();
+				this.showStatus(`Renamed tab to ${active.name}`);
+				this.ui.requestRender();
+				return;
+			}
+			if (parts.length >= 3) {
+				const spec = parts[1];
+				const target = this.findTabBySpec(spec);
+				if (!target) {
+					this.showError(`Tab not found: ${spec}`);
+					return;
+				}
+				const newName = parts.slice(2).join(" ");
+				this.tabManager.renameTab(target.id, newName);
+				target.session.setSessionName?.(newName.trim());
+				this.refreshTabBar();
+				if (this.tabManager.getActiveTab()?.id === target.id) {
+					this.updateTerminalTitle();
+				}
+				this.showStatus(`Renamed tab ${target.id} to ${target.name}`);
+				this.ui.requestRender();
+				return;
+			}
+			this.showError("Usage: /tab rename [spec] <name>");
+			return;
+		}
+
 		const target = this.findTabBySpec(subcommand);
 		if (target) {
 			await this.switchTab(target.id);
 			return;
 		}
 
-		this.showError(`Unknown /tab subcommand: ${subcommand}. Usage: /tab <new|close|switch|next|prev|list>`);
+		this.showError(`Unknown /tab subcommand: ${subcommand}. Usage: /tab <new|close|switch|next|prev|rename|list>`);
 	}
 
 	private refreshTabBar(): void {
@@ -2473,6 +2582,9 @@ export class InteractiveMode {
 			onSwitch: (tabId) => void this.switchTab(tabId),
 			onAdd: () => void this.addTab(),
 			onClose: (tabId) => void this.closeTab(tabId),
+			onRename: (tabId) => void this.promptRenameTab(tabId),
+			requestRender: () => this.ui.requestRender(),
+			addInputListener: (listener) => this.ui.addInputListener(listener),
 		});
 	}
 
@@ -2715,6 +2827,71 @@ export class InteractiveMode {
 		) {
 			this.statusContainer.addChild(this.idleStatus);
 		}
+	}
+
+	/** Key of a tab's retry UI state; partial mock contexts have no tab. */
+	private retryStateKey(slot: TabSlot | undefined): string {
+		return slot?.id ?? "";
+	}
+
+	private getTabRetryState(tabId: string): TabRetryUiState {
+		let state = this.retryUiByTab.get(tabId);
+		if (!state) {
+			state = { autoRetry: false };
+			this.retryUiByTab.set(tabId, state);
+		}
+		return state;
+	}
+
+	/** Hand the editor back the Escape behavior a tab's auto-retry took over. */
+	private restoreTabEscape(state: TabRetryUiState | undefined): void {
+		if (!state?.onEscape) return;
+		this.defaultEditor.onEscape = state.onEscape;
+		state.onEscape = undefined;
+	}
+
+	/** Drop a tab's retry UI: restore Escape, dispose its indicator, forget the tab. */
+	private resetTabRetryUi(tabId: string): void {
+		const state = this.retryUiByTab.get(tabId);
+		if (!state) return;
+		this.retryUiByTab.delete(tabId);
+		this.restoreTabEscape(state);
+		if (!state.indicator) return;
+		if (this.activeStatusIndicator === state.indicator) {
+			this.clearStatusIndicator("retry");
+		} else {
+			state.indicator.dispose();
+		}
+	}
+
+	/** Re-arm a tab's retry UI when the tab becomes active again. */
+	private attachTabRetryUi(slot: TabSlot): void {
+		const state = this.retryUiByTab.get(slot.id);
+		if (!state) return;
+		if (!state.indicator && state.pendingRetry) {
+			const { attempt, maxAttempts, delayMs } = state.pendingRetry;
+			state.pendingRetry = undefined;
+			state.indicator = new RetryStatusIndicator(this.ui, attempt, maxAttempts, delayMs);
+		}
+		if (state.indicator && this.activeStatusIndicator !== state.indicator) {
+			this.showStatusIndicator(state.indicator);
+		}
+		if (state.autoRetry && !state.onEscape) {
+			state.onEscape = this.defaultEditor.onEscape;
+			this.defaultEditor.onEscape = () => slot.session.abortRetry();
+		}
+	}
+
+	/** Unmount a tab's retry UI without disposing it, so switching back keeps its countdown. */
+	private detachTabRetryUi(tabId: string): void {
+		const state = this.retryUiByTab.get(tabId);
+		if (!state) return;
+		this.restoreTabEscape(state);
+		if (!state.indicator || this.activeStatusIndicator !== state.indicator) return;
+		this.activeStatusIndicator = undefined;
+		this.activeWorkingIndicatorEmbedded = false;
+		this.statusContainer.clear();
+		this.setEditorWorkingStatusIndicator(undefined);
 	}
 
 	private showWorkingStatusIndicator(): void {
@@ -3155,7 +3332,7 @@ export class InteractiveMode {
 	private showExtensionInput(
 		title: string,
 		placeholder?: string,
-		opts?: ExtensionUIDialogOptions,
+		opts?: ExtensionUIDialogOptions & { initialValue?: string },
 	): Promise<string | undefined> {
 		return new Promise((resolve) => {
 			if (opts?.signal?.aborted) {
@@ -3177,7 +3354,7 @@ export class InteractiveMode {
 				placeholder,
 				(value) => finish(value),
 				() => finish(undefined),
-				{ tui: this.ui, timeout: opts?.timeout },
+				{ tui: this.ui, timeout: opts?.timeout, initialValue: opts?.initialValue },
 			);
 			this.pushExtensionDialog(input, { kind: "question", message: title });
 		});
@@ -3800,12 +3977,13 @@ export class InteractiveMode {
 	}
 
 	private subscribeToAgent(): void {
+		const slot = this.tabManager?.getActiveTab();
 		this.unsubscribe = this.session.subscribe(async (event) => {
-			await this.handleEvent(event);
+			await this.handleEvent(event, slot);
 		});
 	}
 
-	private async handleEvent(event: AgentSessionEvent): Promise<void> {
+	private async handleEvent(event: AgentSessionEvent, slot?: TabSlot): Promise<void> {
 		if (!this.isInitialized) {
 			await this.init();
 		}
@@ -3816,12 +3994,8 @@ export class InteractiveMode {
 		switch (event.type) {
 			case "agent_start":
 				this.pendingTools.clear();
-				// Restore main escape handler if retry handler is still active
-				// (retry success event fires later, but we need main handler now)
-				if (this.retryEscapeHandler) {
-					this.defaultEditor.onEscape = this.retryEscapeHandler;
-					this.retryEscapeHandler = undefined;
-				}
+				// A new attempt ends the retry sleep, so its Escape takeover and indicator are over.
+				this.resetTabRetryUi(this.retryStateKey(slot));
 				break;
 
 			case "turn_start":
@@ -4147,25 +4321,26 @@ export class InteractiveMode {
 			}
 
 			case "auto_retry_start": {
-				// Set up escape to abort retry
-				this.retryEscapeHandler = this.defaultEditor.onEscape;
-				this.defaultEditor.onEscape = () => {
-					this.session.abortRetry();
-				};
-				this.showStatusIndicator(
-					new RetryStatusIndicator(this.ui, event.attempt, event.maxAttempts, event.delayMs),
-				);
+				const state = this.getTabRetryState(this.retryStateKey(slot));
+				state.autoRetry = true;
+				state.pendingRetry = undefined;
+				// Escape aborts this tab's retry, even after a switch back to it.
+				if (!state.onEscape) {
+					const session = slot?.session ?? this.session;
+					state.onEscape = this.defaultEditor.onEscape;
+					this.defaultEditor.onEscape = () => {
+						session.abortRetry();
+					};
+				}
+				state.indicator?.dispose();
+				state.indicator = new RetryStatusIndicator(this.ui, event.attempt, event.maxAttempts, event.delayMs);
+				this.showStatusIndicator(state.indicator);
 				this.ui.requestRender();
 				break;
 			}
 
 			case "auto_retry_end": {
-				// Restore escape handler
-				if (this.retryEscapeHandler) {
-					this.defaultEditor.onEscape = this.retryEscapeHandler;
-					this.retryEscapeHandler = undefined;
-				}
-				this.clearStatusIndicator("retry");
+				this.resetTabRetryUi(this.retryStateKey(slot));
 				// Show error only on final failure (success shows normal response)
 				if (!event.success) {
 					this.showError(`Retry failed after ${event.attempt} attempts: ${event.finalError || "Unknown error"}`);
@@ -4176,15 +4351,17 @@ export class InteractiveMode {
 
 			case "summarization_retry_scheduled": {
 				this.showError(event.errorMessage);
-				this.showStatusIndicator(
-					new RetryStatusIndicator(this.ui, event.attempt, event.maxAttempts, event.delayMs),
-				);
+				const state = this.getTabRetryState(this.retryStateKey(slot));
+				state.pendingRetry = undefined;
+				state.indicator?.dispose();
+				state.indicator = new RetryStatusIndicator(this.ui, event.attempt, event.maxAttempts, event.delayMs);
+				this.showStatusIndicator(state.indicator);
 				this.ui.requestRender();
 				break;
 			}
 
 			case "summarization_retry_attempt_start": {
-				this.clearStatusIndicator("retry");
+				this.resetTabRetryUi(this.retryStateKey(slot));
 				if (event.source === "branchSummary") {
 					this.showStatusIndicator(new BranchSummaryStatusIndicator(this.ui));
 				} else {
@@ -4201,7 +4378,7 @@ export class InteractiveMode {
 			}
 
 			case "summarization_retry_finished": {
-				this.clearStatusIndicator("retry");
+				this.resetTabRetryUi(this.retryStateKey(slot));
 				this.ui.requestRender();
 				break;
 			}

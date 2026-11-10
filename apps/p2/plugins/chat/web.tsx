@@ -76,6 +76,7 @@ import {
 	takeReveal,
 	transcriptOf,
 	transcriptRows,
+	UndoCheckpointContext,
 	useChatScroll,
 	useComposerState,
 	useConnected,
@@ -116,9 +117,12 @@ import { type Session, Sessions } from "../sessions/contract.ts";
 import { SessionMetrics, SessionStatus, WorkerControl } from "../status/contract.ts";
 import { type Child, conversationLocation, SubagentControl, Subagents } from "../subagents/contract.ts";
 import { SessionTree } from "../tree/contract.ts";
+import { SessionCheckpoints } from "../workspace/contract.ts";
 import { Chat, ChatCosts, TranscriptEntries } from "./contract.ts";
 import { type Outgoing, outboxOf } from "./outbox.ts";
+import { RevertBar } from "./RevertBar.tsx";
 import { sessionStart } from "./session-start.ts";
+import { UndoModal } from "./UndoModal.tsx";
 
 /** An upload the server answered with an error status. */
 class UploadError extends Error {
@@ -499,7 +503,12 @@ type DockContent = {
 	readonly above?: ReactNode;
 	readonly composer?: { readonly toBottom?: ReactNode } & (
 		| { readonly bar: ReactNode }
-		| { readonly queued?: ReactNode; readonly props: ComposerProps; readonly footer: ReactNode }
+		| {
+				readonly revert?: ReactNode;
+				readonly queued?: ReactNode;
+				readonly props: ComposerProps;
+				readonly footer: ReactNode;
+		  }
 	);
 };
 
@@ -570,6 +579,7 @@ function Dock({ frame, dockRef }: { frame: Frame; dockRef: (element: HTMLDivElem
 						composer.bar
 					) : (
 						<>
+							{"revert" in composer && composer.revert}
 							{composer.queued}
 							<Composer {...composer.props} textareaRef={frame.composer} />
 							{composer.footer}
@@ -899,6 +909,110 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 		[host, nav, sessionId, setDraft, setError],
 	);
 	const canBranch = owner && conversationId === session?.main;
+	const canUndo = canBranch;
+	const [undoTarget, setUndoTarget] = useState<{
+		entryId: number;
+		loading: boolean;
+		error?: string;
+		diff?: { hasCheckpoint: boolean; added: number; deleted: number };
+	}>();
+	const [revertBanner, setRevertBanner] = useState<{
+		revertId: string;
+		added: number;
+		deleted: number;
+	}>();
+	const openUndoModal = useCallback(
+		(entryId: number) => {
+			setUndoTarget({ entryId, loading: true });
+			const held = host.hold(
+				SessionCheckpoints,
+				{ session: sessionId, conversation: conversationId },
+				BACKGROUND_CONTEXT,
+			);
+			whenLive(held)
+				.then(() => {
+					const checkpoints = liveIn(held, "owner");
+					if (!checkpoints) throw new Error("Only the owner inspects checkpoints");
+					return checkpoints.getDiff({ entryId }, BACKGROUND_CONTEXT);
+				})
+				.then((diff) => {
+					setUndoTarget((current) => (current?.entryId === entryId ? { entryId, loading: false, diff } : current));
+				})
+				.catch((reason: unknown) => {
+					setUndoTarget((current) =>
+						current?.entryId === entryId ? { entryId, loading: false, error: errorText(reason) } : current,
+					);
+				})
+				.finally(() => held.release());
+		},
+		[conversationId, host, sessionId],
+	);
+	const handleUndoConfirm = useCallback(
+		async (entryId: number) => {
+			const held = host.hold(
+				SessionCheckpoints,
+				{ session: sessionId, conversation: conversationId },
+				BACKGROUND_CONTEXT,
+			);
+			try {
+				await whenLive(held);
+				const checkpoints = liveIn(held, "owner");
+				if (!checkpoints) throw new Error("Only the owner undoes checkpoints");
+				const result = await checkpoints.undo({ entryId }, BACKGROUND_CONTEXT);
+				setRevertBanner({
+					revertId: result.revertId,
+					added: result.revertAdded,
+					deleted: result.revertDeleted,
+				});
+			} catch (reason: unknown) {
+				setError(errorText(reason));
+			} finally {
+				held.release();
+			}
+		},
+		[conversationId, host, sessionId, setError],
+	);
+	const handleRevert = useCallback(
+		async (revertId: string) => {
+			const held = host.hold(
+				SessionCheckpoints,
+				{ session: sessionId, conversation: conversationId },
+				BACKGROUND_CONTEXT,
+			);
+			try {
+				await whenLive(held);
+				const checkpoints = liveIn(held, "owner");
+				if (!checkpoints) throw new Error("Only the owner reverts changes");
+				await checkpoints.revert({ revertId }, BACKGROUND_CONTEXT);
+				setRevertBanner(undefined);
+			} catch (reason: unknown) {
+				setError(errorText(reason));
+			} finally {
+				held.release();
+			}
+		},
+		[conversationId, host, sessionId, setError],
+	);
+	const handleDismissRevert = useCallback(
+		(revertId: string) => {
+			const held = host.hold(
+				SessionCheckpoints,
+				{ session: sessionId, conversation: conversationId },
+				BACKGROUND_CONTEXT,
+			);
+			whenLive(held)
+				.then(() => {
+					const checkpoints = liveIn(held, "owner");
+					if (checkpoints) return checkpoints.dismissRevert({ revertId }, BACKGROUND_CONTEXT);
+				})
+				.catch(() => {})
+				.finally(() => {
+					setRevertBanner(undefined);
+					held.release();
+				});
+		},
+		[conversationId, host, sessionId],
+	);
 	// Replies exist while a plugin allows them here (chat-mode, in chat mode); the reply action fills the composer.
 	const startReply = useCallback(
 		(target: { entryId: number; name: string }) => {
@@ -1368,6 +1482,15 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 								{ bar: readOnlyBar }
 							: {
 									toBottom,
+									revert: revertBanner ? (
+										<RevertBar
+											revertId={revertBanner.revertId}
+											added={revertBanner.added}
+											deleted={revertBanner.deleted}
+											onRevert={handleRevert}
+											onDismiss={handleDismissRevert}
+										/>
+									) : undefined,
 									queued: queuedRows,
 									props: {
 										busy,
@@ -1392,6 +1515,16 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 	return (
 		<>
 			<TopBar session={session} child={child} owner={owner} moving={moving} />
+			{undoTarget && (
+				<UndoModal
+					entryId={undoTarget.entryId}
+					diff={undoTarget.diff}
+					loading={undoTarget.loading}
+					error={undoTarget.error}
+					onClose={() => setUndoTarget(undefined)}
+					onConfirm={handleUndoConfirm}
+				/>
+			)}
 			{cwdSheet && owner && session && (
 				<DirectoryPicker
 					value={session.cwd}
@@ -1476,29 +1609,33 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 													<OpenTerminal.Provider value={owner ? openTerminal : undefined}>
 														<ReplyTo.Provider value={participant && canReply ? startReply : undefined}>
 															<BranchFrom.Provider value={canBranch ? branchFrom : undefined}>
-																<RevealEntry.Provider value={reveal}>
-																	<FillGap.Provider value={fillGap}>
-																		<Messages
-																			transcript={shown}
-																			rows={rows}
-																			list={follow.list}
-																			range={follow.range}
-																			stopped={
-																				stopped?.sessionId === sessionId &&
-																				stopped?.conversationId === conversationId &&
-																				!view?.entries.some((entry) =>
-																					entry.model?.some(
-																						(message) =>
-																							message.role === "assistant" &&
-																							message.stopReason === "aborted",
-																					),
-																				)
-																			}
-																			earlier={earlier}
-																			onEarlier={() => void loadEarlier()}
-																		/>
-																	</FillGap.Provider>
-																</RevealEntry.Provider>
+																<UndoCheckpointContext.Provider
+																	value={canUndo ? openUndoModal : undefined}
+																>
+																	<RevealEntry.Provider value={reveal}>
+																		<FillGap.Provider value={fillGap}>
+																			<Messages
+																				transcript={shown}
+																				rows={rows}
+																				list={follow.list}
+																				range={follow.range}
+																				stopped={
+																					stopped?.sessionId === sessionId &&
+																					stopped?.conversationId === conversationId &&
+																					!view?.entries.some((entry) =>
+																						entry.model?.some(
+																							(message) =>
+																								message.role === "assistant" &&
+																								message.stopReason === "aborted",
+																						),
+																					)
+																				}
+																				earlier={earlier}
+																				onEarlier={() => void loadEarlier()}
+																			/>
+																		</FillGap.Provider>
+																	</RevealEntry.Provider>
+																</UndoCheckpointContext.Provider>
 															</BranchFrom.Provider>
 														</ReplyTo.Provider>
 													</OpenTerminal.Provider>

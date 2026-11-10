@@ -13,7 +13,7 @@ import {
 import { durableContext } from "@p2/app/v1/node";
 import { conversationEnvironment, harnessOf, isLocalEnvironment, workerOf } from "@p2/app/v1/worker";
 import { LocationMoveDoc } from "../locations/contract.worker.ts";
-import { Workspace, WorkspaceBackend, WorkspaceTransfer, WorkspaceWrites } from "./contract.ts";
+import { SessionCheckpoints, Workspace, WorkspaceBackend, WorkspaceTransfer, WorkspaceWrites } from "./contract.ts";
 import { Workspace as EnvironmentWorkspace } from "./environment.ts";
 import { workspacePath, workspaceSearchText } from "./protocol.ts";
 
@@ -291,6 +291,40 @@ export default defineFacet((host) => {
 					writes.write({ location: (await workspaceResource.value.current()).location, upload }, ctx),
 				);
 				return null;
+			},
+			createCheckpoint: ({ entryId }, ctx) =>
+				worker().liveness.call(async () => {
+					await (await workspaceResource.value.current()).workspace.createCheckpoint(entryId, durableContext(ctx));
+					return null;
+				}),
+			getCheckpointDiff: ({ entryId }, ctx) =>
+				worker().liveness.call(async () =>
+					(await workspaceResource.value.current()).workspace.getCheckpointDiff(entryId, durableContext(ctx)),
+				),
+			undoToCheckpoint: ({ entryId }, ctx) =>
+				worker().liveness.call(async () =>
+					(await workspaceResource.value.current()).workspace.undoToCheckpoint(entryId, durableContext(ctx)),
+				),
+			revertUndo: ({ revertId }, ctx) =>
+				worker().liveness.call(async () =>
+					(await workspaceResource.value.current()).workspace.revertUndo(revertId, durableContext(ctx)),
+				),
+			dismissRevert: ({ revertId }) =>
+				worker().liveness.call(async () =>
+					(await workspaceResource.value.current()).workspace.dismissRevert(revertId),
+				),
+		};
+	});
+	host.serve(SessionCheckpoints, ({ session, conversation }, principal, self) => {
+		if (!canSend(principal, session)) throw forbidden("participants only");
+		const backend = self.get(WorkspaceBackend, { conversation });
+		return {
+			variant: "owner",
+			members: {
+				getDiff: (query, ctx) => backend.getCheckpointDiff(query, ctx),
+				undo: (query, ctx) => backend.undoToCheckpoint(query, ctx),
+				revert: (query, ctx) => backend.revertUndo(query, ctx),
+				dismissRevert: (query, ctx) => backend.dismissRevert(query, ctx),
 			},
 		};
 	});

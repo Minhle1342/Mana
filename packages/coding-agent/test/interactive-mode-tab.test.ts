@@ -16,6 +16,7 @@ type InteractiveModeTabContext = {
 		switchTab: (id: string) => Promise<boolean>;
 		addTab: (options: { cwd: string; name?: string }) => Promise<TabSlot>;
 		removeTab: (id: string) => Promise<boolean>;
+		renameTab: (id: string, name: string) => boolean;
 	};
 	activeTabRuntime: {
 		newSession: () => Promise<{ cancelled: boolean }>;
@@ -35,10 +36,36 @@ type InteractiveModeTabContext = {
 	switchPrevTab: () => Promise<void>;
 	addTab: (cwd?: string, name?: string) => Promise<TabSlot>;
 	closeTab: (id: string) => Promise<void>;
+	refreshTabBar: () => void;
+	updateTerminalTitle: () => void;
 	handleClearCommand: () => Promise<void>;
-	clearStatusIndicator: () => void;
+	clearStatusIndicator: (kind?: string) => void;
 	findTabBySpec: (spec: string) => TabSlot | undefined;
 	handleTabCommand: (text: string) => Promise<void>;
+	handleEvent: (event: unknown, slot?: TabSlot) => Promise<void>;
+	setupTabListeners: (slot: TabSlot) => void;
+	retryUiByTab: Map<string, TabRetryUiStateFixture>;
+	isInitialized: boolean;
+	pendingTools: Map<string, unknown>;
+	footer: { invalidate: () => void };
+	programStatus: { handleEvent: (event: unknown) => void; reset: () => void };
+	defaultEditor: { onEscape?: () => void };
+	statusContainer: Container;
+	activeStatusIndicator: StatusIndicatorFixture | undefined;
+	activeWorkingIndicatorEmbedded: boolean;
+	setEditorWorkingStatusIndicator: (indicator: unknown) => boolean;
+	showStatusIndicator: (indicator: StatusIndicatorFixture) => void;
+	rebindCurrentSession: (options?: { renderBeforeBind?: boolean }) => Promise<void>;
+	configureTabRuntime: (runtime: AgentSessionRuntime, tabId: string) => void;
+};
+
+type StatusIndicatorFixture = { kind: string; dispose: () => void };
+
+type TabRetryUiStateFixture = {
+	autoRetry: boolean;
+	onEscape?: () => void;
+	indicator?: StatusIndicatorFixture;
+	pendingRetry?: { attempt: number; maxAttempts: number; delayMs: number };
 };
 
 const prototype = InteractiveMode.prototype as unknown as InteractiveModeTabContext;
@@ -60,10 +87,15 @@ function createMockTab(id: string, name: string, cwd = "/work/dir", isStreaming 
 	};
 }
 
-function makeMouseEvent(type: "click" | "press" | "move", x: number, y = 0): TuiMouseEvent {
+function makeMouseEvent(
+	type: "click" | "press" | "move",
+	x: number,
+	y = 0,
+	button: "left" | "middle" | "right" | "none" = "left",
+): TuiMouseEvent {
 	return {
 		type,
-		button: "left",
+		button,
 		x,
 		y,
 		screenX: x,
@@ -219,6 +251,46 @@ describe("InteractiveMode tab commands", () => {
 		expect(clearStatusIndicator).toHaveBeenCalled();
 		expect(requestRender).toHaveBeenCalled();
 	});
+
+	it("dispatches /tab rename to active tab or specified tab", async () => {
+		const tab1 = createMockTab("tab-1", "Tab 1");
+		const tab2 = createMockTab("tab-2", "Tab 2");
+		const renameTab = vi.fn((_id, _name) => true);
+		const refreshTabBar = vi.fn();
+		const updateTerminalTitle = vi.fn();
+		const showStatus = vi.fn();
+		const showError = vi.fn();
+		const requestRender = vi.fn();
+
+		const context = {
+			tabManager: {
+				getAllTabs: () => [tab1, tab2],
+				getActiveTab: () => tab1,
+				renameTab,
+			},
+			refreshTabBar,
+			updateTerminalTitle,
+			showStatus,
+			showError,
+			ui: { requestRender },
+			findTabBySpec: prototype.findTabBySpec,
+		} as unknown as InteractiveModeTabContext;
+
+		// Rename active tab
+		await prototype.handleTabCommand.call(context, "/tab rename FeatureX");
+		expect(renameTab).toHaveBeenCalledWith("tab-1", "FeatureX");
+		expect(refreshTabBar).toHaveBeenCalled();
+		expect(updateTerminalTitle).toHaveBeenCalled();
+		expect(showStatus).toHaveBeenCalledWith("Renamed tab to Tab 1");
+
+		// Rename tab by spec
+		await prototype.handleTabCommand.call(context, "/tab rename 2 OtherFeature");
+		expect(renameTab).toHaveBeenCalledWith("tab-2", "OtherFeature");
+
+		// Invalid usage
+		await prototype.handleTabCommand.call(context, "/tab rename");
+		expect(showError).toHaveBeenCalledWith("Usage: /tab rename [spec] <name>");
+	});
 });
 
 describe("TabBar component mouse interactions and rendering", () => {
@@ -335,6 +407,141 @@ describe("TabBar component mouse interactions and rendering", () => {
 		// Out of bounds on Y
 		expect(tabBar.handleMouse(makeMouseEvent("click", 2, 1))).toBeUndefined();
 	});
+
+	it("truncates long tab names to 15 characters with ellipsis when idle", () => {
+		const longTab = createMockTab("tab-1", "extremely-long-feature-branch-name");
+		const shortTab = createMockTab("tab-2", "short-name");
+		const tabBar = new TabBar({
+			tabs: [longTab, shortTab],
+			activeId: "tab-1",
+			onSwitch: vi.fn(),
+			onAdd: vi.fn(),
+			onClose: vi.fn(),
+		});
+
+		const rendered = tabBar.render(80)[0] ?? "";
+		// Long tab name is truncated to 15 characters (12 chars + ...)
+		expect(rendered).toContain("extremely-lo...");
+		// Short tab name is not truncated
+		expect(rendered).toContain("short-name");
+	});
+
+	it("claims right-click press and fires onRename on right-click", () => {
+		const tab1 = createMockTab("tab-1", "Tab 1");
+		const onSwitch = vi.fn();
+		const onRename = vi.fn();
+		const tabBar = new TabBar({
+			tabs: [tab1],
+			activeId: "tab-1",
+			onSwitch,
+			onAdd: vi.fn(),
+			onClose: vi.fn(),
+			onRename,
+		});
+		tabBar.render(80);
+
+		// Right press claims gesture without firing rename or switch
+		const resPress = tabBar.handleMouse(makeMouseEvent("press", 2, 0, "right"));
+		expect(resPress?.handled).toBe(true);
+		expect(onRename).not.toHaveBeenCalled();
+		expect(onSwitch).not.toHaveBeenCalled();
+
+		// Right click on tab triggers onRename
+		const resClick = tabBar.handleMouse(makeMouseEvent("click", 2, 0, "right"));
+		expect(resClick?.handled).toBe(true);
+		expect(onRename).toHaveBeenCalledWith("tab-1");
+		expect(onSwitch).not.toHaveBeenCalled();
+	});
+
+	it("slides truncated tab name on hover and resets on mouse leave", () => {
+		vi.useFakeTimers();
+		try {
+			const longTab = createMockTab("tab-1", "0123456789abcdefghij"); // 20 chars
+			const requestRender = vi.fn();
+			const tabBar = new TabBar({
+				tabs: [longTab],
+				activeId: "tab-1",
+				onSwitch: vi.fn(),
+				onAdd: vi.fn(),
+				onClose: vi.fn(),
+				requestRender,
+			});
+
+			// Initial idle render shows 15-char truncated name
+			const initialRender = tabBar.render(80)[0] ?? "";
+			expect(initialRender).toContain("0123456789ab...");
+
+			// Mouse move onto tab activates hover
+			const resMove = tabBar.handleMouse(makeMouseEvent("move", 2, 0, "none"));
+			expect(resMove?.handled).toBe(true);
+			expect(resMove?.render).toBe(true);
+
+			// First hover frame starts at offset 0 (first 15 chars)
+			const frame0 = tabBar.render(80)[0] ?? "";
+			expect(frame0).toContain("0123456789abcde");
+
+			// Advance timer by 140ms (1 tick) -> offset 1
+			vi.advanceTimersByTime(140);
+			expect(requestRender).toHaveBeenCalled();
+			const frame1 = tabBar.render(80)[0] ?? "";
+			expect(frame1).toContain("123456789abcdef");
+
+			// Advance by another tick -> offset 2
+			vi.advanceTimersByTime(140);
+			const frame2 = tabBar.render(80)[0] ?? "";
+			expect(frame2).toContain("23456789abcdefg");
+
+			// Mouse moves off the tab (y !== 0) resets hover
+			const resLeave = tabBar.handleMouse(makeMouseEvent("move", 2, 1, "none"));
+			expect(resLeave?.handled).toBe(true);
+			expect(resLeave?.render).toBe(true);
+
+			// Render after leave returns to idle truncation
+			const afterLeave = tabBar.render(80)[0] ?? "";
+			expect(afterLeave).toContain("0123456789ab...");
+
+			tabBar.dispose();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("clears hover slide when TUI input listener reports mouse outside row 0", () => {
+		let registeredListener: ((data: string) => any) | undefined;
+		const addInputListener = vi.fn((listener) => {
+			registeredListener = listener;
+			return () => {
+				registeredListener = undefined;
+			};
+		});
+		const requestRender = vi.fn();
+		const longTab = createMockTab("tab-1", "0123456789abcdefghij");
+		const tabBar = new TabBar({
+			tabs: [longTab],
+			activeId: "tab-1",
+			onSwitch: vi.fn(),
+			onAdd: vi.fn(),
+			onClose: vi.fn(),
+			requestRender,
+			addInputListener,
+		});
+
+		tabBar.render(80);
+		// Hover on tab
+		tabBar.handleMouse(makeMouseEvent("move", 2, 0, "none"));
+
+		expect(registeredListener).toBeDefined();
+		// Simulate mouse move at row 2 (y=1 in SGR coordinates 1-based row 2)
+		registeredListener!("\x1b[<35;5;2M");
+		expect(requestRender).toHaveBeenCalled();
+
+		// Should be reset to idle display
+		const rendered = tabBar.render(80)[0] ?? "";
+		expect(rendered).toContain("0123456789ab...");
+
+		tabBar.dispose();
+		expect(registeredListener).toBeUndefined();
+	});
 });
 
 describe("createChatViewport layout with tabBar", () => {
@@ -360,5 +567,232 @@ describe("createChatViewport layout with tabBar", () => {
 		const entries = (vstack as any).entries;
 		expect(entries[0].component).toBe(tabBar);
 		expect(entries[1].component).toBe(viewport.transcript);
+	});
+});
+
+describe("InteractiveMode auto-retry across tabs", () => {
+	beforeEach(() => initTheme("dark"));
+
+	type RetryContext = {
+		context: InteractiveModeTabContext;
+		tabs: TabSlot[];
+		holders: Array<{ session: unknown }>;
+		mainEscape: () => void;
+		showStatusIndicator: ReturnType<typeof vi.fn>;
+		session: (index: number) => { abortRetry: ReturnType<typeof vi.fn> };
+	};
+
+	/** A two-tab mode context whose active tab and tab list can be switched. */
+	function createRetryContext(): RetryContext {
+		const holders = [
+			{ session: { abortRetry: vi.fn(), subscribe: vi.fn(() => () => {}) } },
+			{ session: { abortRetry: vi.fn(), subscribe: vi.fn(() => () => {}) } },
+		];
+		const createTab = (id: string, name: string, cwd: string, holder: { session: unknown }) => {
+			const tab = {
+				id,
+				name,
+				cwd,
+				runtime: {
+					setBeforeSessionInvalidate: vi.fn(),
+					setRebindSession: vi.fn(),
+					dispose: vi.fn(async () => {}),
+				},
+			};
+			// A tab's session follows its runtime, as TabSlot does in production.
+			Object.defineProperty(tab, "session", { get: () => holder.session, enumerable: true });
+			return tab as unknown as TabSlot;
+		};
+		const tabs = [
+			createTab("tab-1", "Tab 1", "/work/a", holders[0]),
+			createTab("tab-2", "Tab 2", "/work/b", holders[1]),
+		];
+		const active = { id: "tab-1" };
+		const mainEscape = vi.fn();
+		const showStatusIndicator = vi.fn();
+
+		const context = Object.assign(Object.create(InteractiveMode.prototype), {
+			isInitialized: true,
+			retryUiByTab: new Map<string, TabRetryUiStateFixture>(),
+			tabManager: {
+				getAllTabs: () => tabs,
+				getActiveTab: () => tabs.find((tab) => tab.id === active.id),
+				switchTab: async (id: string) => {
+					active.id = id;
+					return true;
+				},
+				removeTab: async (id: string) => {
+					const index = tabs.findIndex((tab) => tab.id === id);
+					if (index === -1) return false;
+					tabs.splice(index, 1);
+					if (active.id === id) active.id = tabs[0]?.id ?? "";
+					return true;
+				},
+				getTab: (id: string) => tabs.find((tab) => tab.id === id),
+				renameTab: () => true,
+			},
+			defaultEditor: { onEscape: mainEscape as (() => void) | undefined },
+			pendingTools: new Map(),
+			footer: { invalidate: () => {} },
+			programStatus: { handleEvent: () => {}, reset: () => {} },
+			ui: { requestRender: () => {} },
+			statusContainer: new Container(),
+			activeWorkingIndicatorEmbedded: false,
+			setEditorWorkingStatusIndicator: () => false,
+			showStatusIndicator: (indicator: StatusIndicatorFixture) => {
+				showStatusIndicator(indicator);
+				context.activeStatusIndicator = indicator;
+			},
+			clearStatusIndicator: (kind?: string) => {
+				if (kind && context.activeStatusIndicator?.kind !== kind) return;
+				context.activeStatusIndicator = undefined;
+			},
+			showError: vi.fn(),
+			refreshTabBar: vi.fn(),
+			updateTerminalTitle: vi.fn(),
+			rebindCurrentSession: vi.fn(async () => {}),
+			themeController: { applyFromSettings: vi.fn() },
+		}) as unknown as InteractiveModeTabContext;
+		context.activeStatusIndicator = undefined;
+
+		const session = (index: number) =>
+			holders[index].session as unknown as {
+				abortRetry: ReturnType<typeof vi.fn>;
+			};
+		return { context, tabs, holders, mainEscape, showStatusIndicator, session };
+	}
+
+	const retryStart = (attempt = 1) => ({
+		type: "auto_retry_start",
+		attempt,
+		maxAttempts: 3,
+		delayMs: 10,
+		errorMessage: "overloaded_error",
+	});
+
+	it("keeps Escape on the tab whose retry started and restores it on switch", async () => {
+		const { context, tabs, mainEscape, session } = createRetryContext();
+
+		await prototype.handleEvent.call(context, retryStart(), tabs[0]);
+		const retryEscape = context.defaultEditor.onEscape;
+		expect(retryEscape).toBeDefined();
+		expect(retryEscape).not.toBe(mainEscape);
+
+		retryEscape?.();
+		expect(session(0).abortRetry).toHaveBeenCalledTimes(1);
+
+		await prototype.switchTab.call(context, "tab-2");
+		expect(context.defaultEditor.onEscape).toBe(mainEscape);
+		expect(context.activeStatusIndicator).toBeUndefined();
+
+		context.defaultEditor.onEscape?.();
+		expect(session(0).abortRetry).toHaveBeenCalledTimes(1);
+		expect(session(1).abortRetry).not.toHaveBeenCalled();
+	});
+
+	it("restores the tab's indicator and Escape when switching back to a retrying tab", async () => {
+		const { context, tabs, mainEscape, session } = createRetryContext();
+
+		await prototype.handleEvent.call(context, retryStart(), tabs[0]);
+		await prototype.switchTab.call(context, "tab-2");
+		await prototype.switchTab.call(context, "tab-1");
+
+		expect(session(0).abortRetry).not.toHaveBeenCalled();
+		expect(context.defaultEditor.onEscape).not.toBe(mainEscape);
+		context.defaultEditor.onEscape?.();
+		expect(session(0).abortRetry).toHaveBeenCalledTimes(1);
+
+		await prototype.handleEvent.call(context, { type: "auto_retry_end", success: true, attempt: 1 }, tabs[0]);
+		expect(context.defaultEditor.onEscape).toBe(mainEscape);
+		expect(context.retryUiByTab.size).toBe(0);
+	});
+
+	it("does not save a retry closure as the main Escape on the next attempt", async () => {
+		const { context, tabs, mainEscape, session } = createRetryContext();
+
+		await prototype.handleEvent.call(context, retryStart(1), tabs[0]);
+		const firstRetryEscape = context.defaultEditor.onEscape;
+		await prototype.handleEvent.call(context, { type: "agent_start" }, tabs[0]);
+		expect(context.defaultEditor.onEscape).toBe(mainEscape);
+		// The attempt is running, so nothing is left to cancel.
+		expect(context.retryUiByTab.size).toBe(0);
+		expect(context.activeStatusIndicator).toBeUndefined();
+
+		await prototype.handleEvent.call(context, retryStart(2), tabs[0]);
+		const secondRetryEscape = context.defaultEditor.onEscape;
+		expect(secondRetryEscape).not.toBe(mainEscape);
+		expect(secondRetryEscape).not.toBe(firstRetryEscape);
+
+		await prototype.handleEvent.call(context, { type: "auto_retry_end", success: false, attempt: 2 }, tabs[0]);
+		expect(context.defaultEditor.onEscape).toBe(mainEscape);
+		expect(session(0).abortRetry).not.toHaveBeenCalled();
+	});
+
+	it("shows a background tab's retry only when that tab becomes active", async () => {
+		const { context, tabs, showStatusIndicator, session } = createRetryContext();
+		prototype.setupTabListeners.call(context, tabs[1]);
+		const listener = (tabs[1].session as unknown as { subscribe: { mock: { calls: unknown[][] } } }).subscribe.mock
+			.calls[0][0] as (event: unknown) => Promise<void>;
+
+		await listener(retryStart());
+		expect(showStatusIndicator).not.toHaveBeenCalled();
+		// Parked, not mounted: no animated indicator runs for a hidden tab.
+		expect(context.retryUiByTab.get("tab-2")?.indicator).toBeUndefined();
+		expect(context.retryUiByTab.get("tab-2")?.pendingRetry).toMatchObject({ attempt: 1, maxAttempts: 3 });
+
+		await prototype.switchTab.call(context, "tab-2");
+		expect(showStatusIndicator).toHaveBeenCalledTimes(1);
+		expect(showStatusIndicator.mock.calls[0][0]).toMatchObject({ kind: "retry" });
+		context.defaultEditor.onEscape?.();
+		expect(session(1).abortRetry).toHaveBeenCalledTimes(1);
+
+		await prototype.handleEvent.call(context, { type: "auto_retry_end", success: true, attempt: 1 }, tabs[1]);
+		expect(context.retryUiByTab.size).toBe(0);
+		expect(context.activeStatusIndicator).toBeUndefined();
+	});
+
+	it("clears a background tab's retry without mounting it", async () => {
+		const { context, tabs, showStatusIndicator } = createRetryContext();
+		prototype.setupTabListeners.call(context, tabs[1]);
+		const listener = (tabs[1].session as unknown as { subscribe: { mock: { calls: unknown[][] } } }).subscribe.mock
+			.calls[0][0] as (event: unknown) => Promise<void>;
+
+		await listener(retryStart());
+		await listener({ type: "auto_retry_end", success: false, attempt: 1, finalError: "overloaded_error" });
+
+		expect(context.retryUiByTab.size).toBe(0);
+		expect(showStatusIndicator).not.toHaveBeenCalled();
+		await prototype.switchTab.call(context, "tab-2");
+		expect(showStatusIndicator).not.toHaveBeenCalled();
+	});
+
+	it("drops a closed tab's retry state and gives Escape back", async () => {
+		const { context, tabs, mainEscape } = createRetryContext();
+
+		await prototype.handleEvent.call(context, retryStart(), tabs[0]);
+		expect(context.defaultEditor.onEscape).not.toBe(mainEscape);
+
+		await prototype.closeTab.call(context, "tab-1");
+		expect(context.defaultEditor.onEscape).toBe(mainEscape);
+		expect(context.retryUiByTab.size).toBe(0);
+		expect(context.activeStatusIndicator).toBeUndefined();
+	});
+
+	it("re-attaches tab listeners to a tab's replacement session", async () => {
+		const { context, tabs, holders } = createRetryContext();
+		prototype.configureTabRuntime.call(context, tabs[0].runtime, "tab-1");
+		const setRebindSession = (tabs[0].runtime as unknown as { setRebindSession: ReturnType<typeof vi.fn> })
+			.setRebindSession;
+		const rebind = setRebindSession.mock.calls[0][0] as (session: unknown) => Promise<void>;
+
+		const replacement = {
+			autoNameFirstTurn: false,
+			subscribe: vi.fn(() => () => {}),
+			sessionManager: { getSessionName: () => "replacement" },
+		};
+		holders[0].session = replacement;
+		await rebind(replacement);
+
+		expect(replacement.subscribe).toHaveBeenCalledTimes(1);
 	});
 });

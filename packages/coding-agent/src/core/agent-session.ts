@@ -199,6 +199,26 @@ export function parseSkillBlock(text: string): ParsedSkillBlock | null {
 	};
 }
 
+/**
+ * Extract <tab_name>...</tab_name> from assistant message text, strip it in-place,
+ * and return the cleaned tab name (max 50 chars).
+ */
+export function extractAndStripTabName(message: AgentMessage): string | undefined {
+	if (message.role !== "assistant" || !Array.isArray(message.content)) return undefined;
+	for (const block of message.content) {
+		if (block.type === "text" && typeof block.text === "string") {
+			const match = block.text.match(/<tab_name>\s*([\s\S]*?)\s*<\/tab_name>\s*/i);
+			if (match) {
+				const rawName = match[1].replace(/\s+/g, " ").trim();
+				const name = rawName.slice(0, 50).trim();
+				block.text = block.text.replace(/<tab_name>[\s\S]*?<\/tab_name>\s*/i, "");
+				return name || undefined;
+			}
+		}
+	}
+	return undefined;
+}
+
 /** Tool execution events of calls a tool made through `ctx.executeTool()` carry `parentToolCallId`. */
 type WithParentToolCallId<E> = E extends {
 	type: "tool_execution_start" | "tool_execution_update" | "tool_execution_end";
@@ -270,6 +290,8 @@ export interface AgentSessionConfig {
 	cwd: string;
 	/** Models to cycle through with Ctrl+P (from --models flag) */
 	scopedModels?: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
+	/** Whether to automatically ask the LLM for a task summary to name the tab on the first turn */
+	autoNameFirstTurn?: boolean;
 	/** Resource loader for extensions, skills, prompts, themes, context files, and system prompt */
 	resourceLoader: ResourceLoader;
 	/** SDK custom tools registered outside extensions */
@@ -410,6 +432,7 @@ export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
 	readonly settingsManager: SettingsManager;
+	autoNameFirstTurn?: boolean;
 
 	private _scopedModels: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
 
@@ -519,6 +542,7 @@ export class AgentSession {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settingsManager = config.settingsManager;
+		this.autoNameFirstTurn = config.autoNameFirstTurn ?? false;
 		this._scopedModels = config.scopedModels ?? [];
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
@@ -1201,6 +1225,17 @@ export class AgentSession {
 			if (this._queuedMessagesWithImages.has(event.message)) {
 				this._queuedMessagesWithImages.delete(event.message);
 				await this._normalizeQueuedMessageImages(event.message);
+			}
+		}
+
+		if (
+			this.autoNameFirstTurn &&
+			(event.type === "message_update" || event.type === "message_end") &&
+			event.message.role === "assistant"
+		) {
+			const tabName = extractAndStripTabName(event.message);
+			if (tabName && !this.sessionManager.getSessionName()) {
+				this.setSessionName(tabName);
 			}
 		}
 
@@ -2039,6 +2074,11 @@ export class AgentSession {
 				details: msg.details,
 				timestamp: Date.now(),
 			});
+		}
+		const isFirstTurn = !this.messages.some((m) => m.role === "assistant");
+		if (this.autoNameFirstTurn && isFirstTurn && !this.sessionManager.getSessionName()) {
+			result.systemPromptOptions.sections.tab_naming =
+				"At the very start of your response, provide a short 2-4 word title/summary for this task enclosed in <tab_name>...</tab_name>. For example: <tab_name>Fix login bug</tab_name>. After the tag, continue your normal response.";
 		}
 		const updateMessage = this._preparePromptAndToolLoadout(result.systemPromptOptions);
 		this._runSystemPromptOptions = result.systemPromptOptions;

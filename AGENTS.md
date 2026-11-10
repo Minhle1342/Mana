@@ -1,5 +1,11 @@
 # Development Rules
 
+## Repository Layout
+
+- `packages/*` are the published libraries; `packages/coding-agent` is the `pi` CLI. Root `tsconfig.json` and `vitest.base.ts` alias `@earendil-works/*` to each package's `src`, so type checks and most unit tests run from source; the full Chord and Durable suites need built `dist/` (see Commands).
+- `apps/p2` is a separate app with its own Biome/TypeScript and tests; the root check and test commands skip `apps/`. `apps/p3` currently holds docs only.
+- Root `package.json` also lists nested workspaces such as `packages/chord/test/examples/61-tutorial` and the coding-agent extension examples.
+
 ## Conversational Style
 
 - Keep answers short and concise
@@ -25,7 +31,7 @@
 - Use only erasable TypeScript syntax (Node strip-only mode) in code checked by the root config (`packages/*/src`, `packages/*/test`, `packages/coding-agent/examples`): no parameter properties, `enum`, `namespace`/`module`, `import =`, `export =`, or other constructs needing JS emit. Use explicit fields with constructor assignments.
 - Always ask before removing functionality or code that appears intentional.
 - Do not preserve backward compatibility unless the user asks for it.
-- Never hardcode key checks (e.g. `matchesKey(keyData, "ctrl+x")`). Add defaults to `DEFAULT_EDITOR_KEYBINDINGS` or `DEFAULT_APP_KEYBINDINGS` so they stay configurable.
+- Never hardcode key checks (e.g. `matchesKey(keyData, "ctrl+x")`). Add defaults to `TUI_KEYBINDINGS` (`packages/tui/src/keybindings.ts`) or `APP_KEYBINDINGS` (`packages/coding-agent/src/core/keybindings.ts`) so they stay configurable.
 - Never modify `packages/ai/src/models.generated.ts` directly; update the catalog definitions in `packages/ai/catalog/` instead (see its README), then regenerate. Including the resulting `models.generated.ts` diff is always OK, even if regeneration includes unrelated upstream model metadata changes. The generated model data in `packages/ai/src/providers/data/` is gitignored: never stage it, and don't look for it in git history.
 
 ## Chord v2 Code Style
@@ -42,18 +48,25 @@ Binding for Chord v2 (`packages/chord/src/`) and its tests, when writing and whe
 - Deferred work: anything left to a later slice goes into the section "Carry-over" of `packages/chord/docs/slices.md` under that slice, in the same change; a slice's spec and build include every entry of its section.
 - Before reporting: re-read every changed file top to bottom as a stranger would; each file must be understandable without jumping around. Then `npm run check` and the layer's tests.
 
+## Adding an LLM Provider
+
+Adding or changing a provider in `packages/ai` spans core types, the model catalog, the provider factory, tests, coding-agent wiring, and docs. Follow [.pi/skills/add-llm-provider.md](.pi/skills/add-llm-provider.md) in full.
+
 ## Commands
 
-- After code changes (not docs): `npm run check` (full output, no tail). Fix all errors, warnings, and infos before committing. Does not run tests.
+- After code changes (not docs): `npm run check` (full output, no tail). It runs `biome --write` first, so it rewrites formatting, then the dependency, import, install-lock, and browser-smoke checks and `tsc`. Fix all errors, warnings, and infos before committing. Does not run tests.
 - `apps/p2` is outside the root check and the root tests. After p2 changes also run `cd apps/p2 && npm run check`; p2's suite is `cd apps/p2 && npm test` (TUI tests need Node 26, browser tests need `CHROMIUM_BIN`).
-- Run `npm run build` whenever something needs built output (`dist/`): tests or benchmarks that import built packages, Durable's workerd suite. The full suites of Chord and Durable need it: Chord's tests that start Node processes or bundle with esbuild load workspace packages from `dist/` (the rest run from source by its vitest config), and Durable imports pi-ai's `utils/*`, which have no source export. Never use it to type check or lint: that is `npm run check`, the preferred check.
+- `packages/env` tests need the daemon: `npm run build:daemon --workspace packages/env` (CI builds it before the `other` suite).
+- Run `npm run build` whenever something needs built output (`dist/`): tests or benchmarks that import built packages, Durable's workerd suite. The full suites of Chord and Durable need it: Chord's tests that start Node processes or bundle with esbuild load workspace packages from `dist/` (the rest run from source by its vitest config), and Durable imports pi-ai's `utils/*`, which have no source export. Never use it to type check or lint: that is `npm run check`, the preferred check. `build` refreshes model data over the network; use `npm run build:offline` when `packages/ai/src/providers/data/` is already hydrated. CI order is `npm ci --ignore-scripts`, `npm run build`, `npm run check`, then per-package tests.
 - Never run `npm test` unless requested by the user.
 - Never run the full vitest suite directly: it includes e2e tests that activate when endpoint/auth env vars are present. For all non-e2e tests, run `./test.sh` from the repo root. It runs `packages/*` only. Otherwise run specific tests from the package root:
   - Vitest: `node "$(git rev-parse --show-toplevel)/node_modules/vitest/dist/cli.js" --run test/specific.test.ts`
   - `packages/tui` (`node:test`): `node --test test/specific.test.ts`
 - If you create or modify a test file, run it and iterate on test or implementation until it passes.
+- Run pi from the checkout with `./pi-test.sh` (Windows: `pi-test.ps1` or `pi-test.bat`).
+- `npm run test:scripts` covers `scripts/*.test.*`; `npm run test:mcp-conformance` runs the MCP conformance suite against `packages/coding-agent/test/mcp-conformance/baseline.json`.
 - For `packages/coding-agent/test/suite/`, use `test/suite/harness.ts` + the faux provider. No real provider APIs, keys, or paid tokens.
-- When regressions tests for fixing a github issue, add a comment with the github issue number next to the test.
+- When adding regression tests for a GitHub issue, add a comment with the issue number next to the test.
 - For ad-hoc scripts, `write` them to a temp file (e.g. `/tmp`), run, edit if needed, remove when done. Don't embed multi-line scripts in `bash` commands.
 - Never commit unless the user asks.
 
@@ -90,7 +103,7 @@ If rebase conflicts occur:
 
 ## Issues and PRs
 
-See `CONTRIBUTING.md` for the contributor gate (auto-close workflows, `lgtm`/`lgtmi`, quality bar).
+See `CONTRIBUTING.md` for the contributor gate (auto-close workflows, `lgtm`/`lgtmi`, quality bar). Load [.pi/skills/github-work.md](.pi/skills/github-work.md), which routes to the `.pi/prompts/{is,pr,wr}.md` templates; read the matching template before starting.
 
 When reviewing PRs:
 
@@ -106,7 +119,7 @@ When posting issue/PR comments:
 
 - Write the comment to a temp file and post with `gh issue/pr comment --body-file` (never multi-line markdown via `--body`).
 - Keep comments concise, technical, in the user's tone.
-- End every AI-posted comment with the AI-generated disclaimer line specified by the originating prompt (e.g. `This comment is AI-generated by `/wr``).
+- End every AI-posted comment with the exact disclaimer line the originating prompt specifies, e.g. ``This comment is AI-generated by `/wr` ``.
 
 When closing issues via commit:
 
@@ -114,7 +127,7 @@ When closing issues via commit:
 
 ## Writing p2 plugin code
 
-Before writing or reviewing plugin code in `apps/p2` (server and worker facets, contracts, stores), read [apps/p2/docs/plugin-practices.md](apps/p2/docs/plugin-practices.md) in full and follow it.
+Before writing or reviewing plugin code in `apps/p2` (and `apps/p3`), read [apps/p2/docs/plugin-practices.md](apps/p2/docs/plugin-practices.md) in full and follow it. Read [apps/p2/DEV.md](apps/p2/DEV.md) for the Node 26 TUI setup and the security boundary.
 
 ## Building p2's web UI
 
@@ -126,7 +139,7 @@ For testing pi's interactive mode, load and follow [.pi/skills/interactive-testi
 
 ## Changelog
 
-Location: `packages/*/CHANGELOG.md` (one per package).
+Location: `packages/*/CHANGELOG.md` (published packages; `packages/evals` has none).
 
 Sections under `## [Unreleased]`: `### Breaking Changes` (API changes requiring migration), `### Added`, `### Changed`, `### Fixed`, `### Removed`.
 
@@ -134,7 +147,7 @@ Rules:
 
 - All new entries go under `## [Unreleased]`. Read the full section first and append to existing subsections; never duplicate them.
 - Released version sections (e.g. `## [0.12.2]`) are immutable; never modify them.
-- Do not create changelog entries when the work targets a branch other than `main`
+- Do not create changelog entries when the work targets a branch other than `main`.
 
 Attribution:
 

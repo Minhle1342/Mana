@@ -2,6 +2,7 @@ import {
 	type GenerateContentConfig,
 	type GenerateContentParameters,
 	GoogleGenAI,
+	type GoogleGenAIOptions,
 	type ThinkingConfig,
 } from "@google/genai";
 import { calculateCost, clampThinkingLevel } from "../models.ts";
@@ -23,6 +24,7 @@ import { formatProviderError, normalizeProviderError } from "../utils/error-body
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { providerHeadersToRecord } from "../utils/headers.ts";
 import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
+import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { getSystemMessageText } from "../utils/text.ts";
 import { collapseSystemMessages, getCurrentTools, getInitialSystemMessage } from "../utils/transcript.ts";
@@ -88,7 +90,8 @@ export const stream: StreamFunction<"google-generative-ai", GoogleOptions> = (
 				throw new Error("Custom fetch is not supported by the Google Generative AI adapter");
 			}
 			const apiKey = options?.apiKey;
-			if (!apiKey) {
+			const hasAuthHeader = Boolean(options?.headers?.Authorization || options?.headers?.authorization);
+			if (!apiKey && !hasAuthHeader) {
 				throw new Error(`No API key for provider: ${model.provider}`);
 			}
 			const client = createClient(model, apiKey, options?.headers, options?.identity);
@@ -287,7 +290,7 @@ export const stream: StreamFunction<"google-generative-ai", GoogleOptions> = (
 			stream.end();
 		} catch (error) {
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = formatProviderError(normalizeProviderError(error));
+			output.errorMessage = formatGoogleError(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -302,7 +305,8 @@ export const streamSimple: StreamFunction<"google-generative-ai", SimpleStreamOp
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream => {
 	const apiKey = options?.apiKey;
-	if (!apiKey) {
+	const hasAuthHeader = Boolean(options?.headers?.Authorization || options?.headers?.authorization);
+	if (!apiKey && !hasAuthHeader) {
 		throw new Error(`No API key for provider: ${model.provider}`);
 	}
 
@@ -339,6 +343,10 @@ export const streamSimple: StreamFunction<"google-generative-ai", SimpleStreamOp
 	} satisfies GoogleOptions);
 };
 
+function isOAuthToken(apiKey?: string): boolean {
+	return typeof apiKey === "string" && (apiKey.startsWith("ya29.") || apiKey.startsWith("Bearer "));
+}
+
 function createClient(
 	model: Model<"google-generative-ai">,
 	apiKey?: string,
@@ -353,6 +361,42 @@ function createClient(
 	const headers = providerHeadersToRecord(getIdentityHeaders(model, identity), model.headers, optionsHeaders);
 	if (headers) {
 		httpOptions.headers = headers;
+	}
+
+	const userProject = getProviderEnvValue("GOOGLE_CLOUD_PROJECT") || getProviderEnvValue("GCLOUD_PROJECT");
+	if (userProject && !httpOptions.headers?.["x-goog-user-project"] && !httpOptions.headers?.["X-Goog-User-Project"]) {
+		httpOptions.headers = { ...httpOptions.headers, "x-goog-user-project": userProject };
+	}
+
+	const isOAuth =
+		isOAuthToken(apiKey) || Boolean(httpOptions.headers?.Authorization || httpOptions.headers?.authorization);
+
+	if (isOAuth) {
+		const rawToken =
+			(typeof apiKey === "string" && apiKey) ||
+			(typeof httpOptions.headers?.Authorization === "string" ? httpOptions.headers.Authorization : undefined) ||
+			(typeof httpOptions.headers?.authorization === "string" ? httpOptions.headers.authorization : undefined);
+		const token = rawToken?.replace(/^Bearer\s+/i, "");
+
+		const authHeaders = new Headers();
+		if (token) {
+			authHeaders.set("authorization", `Bearer ${token}`);
+		}
+
+		// When authenticating with an OAuth token (e.g. Google Pro user account sign-in),
+		// @google/genai requires a custom authClient so NodeAuth does not attempt to resolve
+		// Application Default Credentials (ADC) from the local machine.
+		const authClient = {
+			getRequestHeaders: async () => authHeaders,
+		};
+
+		return new GoogleGenAI({
+			apiKey: undefined,
+			googleAuthOptions: {
+				authClient: authClient as unknown as NonNullable<GoogleGenAIOptions["googleAuthOptions"]>["authClient"],
+			},
+			httpOptions: Object.keys(httpOptions).length > 0 ? httpOptions : undefined,
+		});
 	}
 
 	return new GoogleGenAI({
@@ -463,4 +507,17 @@ function getGoogleBudget(
 	}
 
 	return -1;
+}
+
+function formatGoogleError(error: unknown): string {
+	const message = formatProviderError(normalizeProviderError(error));
+	if (message.includes("ACCESS_TOKEN_SCOPE_INSUFFICIENT")) {
+		return (
+			"Google OAuth token has insufficient scopes for Google AI Studio (generativelanguage.googleapis.com). " +
+			"Consumer Google Pro / Google One AI subscriptions do not grant Google AI Studio API access via OAuth. " +
+			"To use Gemini models, please sign in using a Gemini API key from https://aistudio.google.com/apikey, " +
+			"or set GOOGLE_OAUTH_CLIENT_ID with generative-language scopes, or use the google-vertex provider with a GCP project."
+		);
+	}
+	return message;
 }

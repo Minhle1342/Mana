@@ -19,5 +19,6 @@ export function registerLazyOAuthFlows(): void {
 		meta: async () => (await import("./auth/oauth/meta.ts")).metaOAuth,
 		xai: async () => (await import("./auth/oauth/xai.ts")).xaiOAuth,
 		radius: async (options) => (await import("./auth/oauth/radius.ts")).createRadiusOAuth(options),
+		google: async () => (await import("./auth/oauth/google.ts")).googleOAuth,
 	});
 }

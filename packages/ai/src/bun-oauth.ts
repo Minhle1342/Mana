@@ -1,5 +1,6 @@
 import { anthropicOAuth } from "./auth/oauth/anthropic.ts";
 import { githubCopilotOAuth } from "./auth/oauth/github-copilot.ts";
+import { googleOAuth } from "./auth/oauth/google.ts";
 import { kimiCodingOAuth } from "./auth/oauth/kimi-coding.ts";
 import { registerBundledOAuthFlowLoaders } from "./auth/oauth/load.ts";
 import { metaOAuth } from "./auth/oauth/meta.ts";
@@ -21,5 +22,6 @@ export function registerBunOAuthFlows(): void {
 		meta: () => metaOAuth,
 		xai: () => xaiOAuth,
 		radius: createRadiusOAuth,
+		google: () => googleOAuth,
 	});
 }

@@ -24,6 +24,7 @@ type OAuthFlowLoaders = {
 	meta: () => OAuthAuth | Promise<OAuthAuth>;
 	xai: () => OAuthAuth | Promise<OAuthAuth>;
 	radius: (options: { name: string; gateway: string }) => OAuthAuth | Promise<OAuthAuth>;
+	google: () => OAuthAuth | Promise<OAuthAuth>;
 };
 
 let bundledLoaders: OAuthFlowLoaders | undefined;
@@ -80,4 +81,9 @@ export const loadRadiusOAuth = async (options: { name: string; gateway: string }
 			createRadiusOAuth: (input: { name: string; gateway: string }) => OAuthAuth;
 		}
 	).createRadiusOAuth(options);
+};
+
+export const loadGoogleOAuth = async (): Promise<OAuthAuth> => {
+	if (bundledLoaders) return bundledLoaders.google();
+	return ((await importOAuthModule("./google.ts")) as { googleOAuth: OAuthAuth }).googleOAuth;
 };
