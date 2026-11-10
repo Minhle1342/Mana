@@ -1024,6 +1024,40 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 		},
 		[conversationId, host, sessionId],
 	);
+
+	/** `/undo`: ho.revert sang checkpoint của lượt người dùng gần nhất; `/revert`: khôi phục lại trạng thái trước khi undo. */
+	async function handleSlashCommand(text: string) {
+		if (busy) throw new Error("Không thể dùng lệnh slash khi một lượt đang chạy");
+		const held = host.hold(
+			SessionCheckpoints,
+			{ session: sessionId, conversation: conversationId },
+			BACKGROUND_CONTEXT,
+		);
+		try {
+			await whenLive(held);
+			const checkpoints = liveIn(held, "owner");
+			if (!checkpoints) throw new Error("Only the owner uses checkpoint commands");
+			if (text === "/undo") {
+				// Undo checkpoint của lượt người dùng mới nhất trong transcript.
+				const userEntry = [...(view?.entries ?? [])].reverse().find((entry) => entry.kind === "p2.input");
+				const entryId = userEntry?.id ?? newestEntry;
+				const result = await checkpoints.undo({ entryId }, BACKGROUND_CONTEXT);
+				setRevertBanner({
+					revertId: result.revertId,
+					added: result.revertAdded,
+					deleted: result.revertDeleted,
+				});
+			} else if (text === "/revert") {
+				if (!revertBanner) throw new Error("Không có revert đang hoạt động để khôi phục");
+				await checkpoints.revert({ revertId: revertBanner.revertId }, BACKGROUND_CONTEXT);
+				setRevertBanner(undefined);
+			}
+		} catch (reason: unknown) {
+			setError(errorText(reason));
+		} finally {
+			held.release();
+		}
+	}
 	// Replies exist while a plugin allows them here (chat-mode, in chat mode); the reply action fills the composer.
 	const startReply = useCallback(
 		(target: { entryId: number; name: string }) => {
@@ -1166,6 +1200,12 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 	const send = () => {
 		const text = draft.trim();
 		if ((!text && !files.length) || !canWrite) return;
+		// Slash commands act on the workspace instead of sending a message.
+		if (text === "/undo" || text === "/revert") {
+			void handleSlashCommand(text);
+			setDraft("");
+			return;
+		}
 		lightTap();
 		setStopped(undefined);
 		const id = crypto.randomUUID();
