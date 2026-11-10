@@ -121,6 +121,7 @@ import {
 	sessionEntryToContextMessages,
 	type UsageEntry,
 } from "../../core/session-manager.ts";
+import { SessionTabManager, type TabSlot } from "../../core/session-tab-manager.ts";
 import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import { getSourcePackageKey, type SourceInfo } from "../../core/source-info.ts";
@@ -135,7 +136,7 @@ import { copyToClipboard, readClipboardFilePaths, readClipboardText } from "../.
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
 import { parseGitUrl } from "../../utils/git.ts";
 import { ensurePngTranscoder } from "../../utils/image-convert.ts";
-import { getCwdRelativePath, shortenHomePath } from "../../utils/paths.ts";
+import { getCwdRelativePath, resolvePath, shortenHomePath } from "../../utils/paths.ts";
 import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { loadAllHighlightLanguages } from "../../utils/syntax-highlight.ts";
@@ -184,6 +185,7 @@ import {
 	type StatusIndicator,
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
+import { TabBar } from "./components/tab-bar.ts";
 import { ThemedText } from "./components/themed-text.ts";
 import { ThinkingSelectorComponent } from "./components/thinking-selector.ts";
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
@@ -467,7 +469,9 @@ interface ExtensionChangelogUpdate {
 }
 
 export class InteractiveMode {
-	private runtimeHost: AgentSessionRuntime;
+	private runtimeHost?: AgentSessionRuntime;
+	private tabManager!: SessionTabManager;
+	private tabBar?: TabBar;
 	private renderer: TuiMainScreen | TuiAltScreen;
 	private ui: TUI;
 	private mainScreenRenderState: TuiMainScreenRenderState | undefined;
@@ -599,6 +603,7 @@ export class InteractiveMode {
 	private extensionWidgetsBelow = new Map<string, Component & { dispose?(): void }>();
 	private widgetContainerAbove!: Container;
 	private widgetContainerBelow!: Container;
+	private tabBarContainer!: Container;
 
 	// Custom footer from extension (undefined = use built-in footer)
 	private customFooter: (Component & { dispose?(): void }) | undefined = undefined;
@@ -619,9 +624,20 @@ export class InteractiveMode {
 	private autoTrustOnReloadCwd: string | undefined;
 	private themeController: InteractiveThemeController;
 
-	// Convenience accessors
+	// Convenience accessors — delegate to the active tab so the whole UI renders
+	// the active session's cwd, model, messages, etc. Fall back to runtimeHost
+	// when running in partial/prototype mock test contexts.
 	private get session(): AgentSession {
-		return this.runtimeHost.session;
+		const slot = this.tabManager?.getActiveTab();
+		if (slot) return slot.session;
+		if (this.runtimeHost?.session) return this.runtimeHost.session;
+		throw new Error("No active tab");
+	}
+	private get activeTabRuntime(): AgentSessionRuntime {
+		const slot = this.tabManager?.getActiveTab();
+		if (slot) return slot.runtime;
+		if (this.runtimeHost) return this.runtimeHost;
+		throw new Error("No active tab");
 	}
 	private get agent() {
 		return this.session.agent;
@@ -635,17 +651,24 @@ export class InteractiveMode {
 
 	constructor(runtimeHost: AgentSessionRuntime, options: InteractiveModeOptions = {}) {
 		this.runtimeHost = runtimeHost;
+		this.tabManager = new SessionTabManager({
+			firstRuntime: runtimeHost,
+			createRuntimeFactory: runtimeHost.createRuntimeFactory,
+			agentDir: runtimeHost.services.agentDir,
+			name: "Tab 1",
+			onRuntimeCreated: (runtime, tabId) => {
+				this.configureTabRuntime(runtime, tabId);
+			},
+		});
 		setCapabilityOverrides(this.settingsManager.getTerminalCapabilityOverrides());
 		const tuiMode = options.tuiMode ?? this.settingsManager.getTuiMode();
 		this.options = { ...options, tuiMode };
 		this.autoTrustOnReloadCwd = options.autoTrustOnReloadCwd;
-		this.runtimeHost.setBeforeSessionInvalidate(() => {
-			this.resetExtensionUI();
-		});
-		this.runtimeHost.setRebindSession(async () => {
-			await this.rebindCurrentSession({ renderBeforeBind: true });
-			this.themeController.applyFromSettings();
-		});
+		this.configureTabRuntime(runtimeHost, "tab-1");
+		const firstTab = this.tabManager.getActiveTab();
+		if (firstTab) {
+			this.setupTabListeners(firstTab);
+		}
 		this.version = VERSION;
 		this.renderer = createInteractiveTui({
 			tuiMode,
@@ -992,6 +1015,19 @@ export class InteractiveMode {
 
 		this.registerSignalHandlers();
 
+		// Tab bar: one row above the document/chat area. Click a tab to switch;
+		// "+" opens a new tab at the active tab's cwd; "x" closes a tab.
+		this.tabBar = new TabBar({
+			tabs: this.tabManager.getAllTabs(),
+			activeId: this.tabManager.getActiveTab()?.id,
+			onSwitch: (id) => void this.switchTab(id),
+			onAdd: () => void this.addTab(),
+			onClose: (id) => void this.closeTab(id),
+		});
+		this.tabBarContainer = new Container();
+		this.tabBarContainer.addChild(this.tabBar);
+		this.tabBarContainer.addChild(new DynamicBorder());
+
 		// Load changelogs (only show new entries, skip for resumed sessions)
 		this.changelogMarkdown = this.getChangelogForDisplay();
 		this.extensionChangelogUpdates = this.getExtensionChangelogUpdates();
@@ -1006,6 +1042,7 @@ export class InteractiveMode {
 		// Keep one component tree and remount it when changing renderers.
 		this.renderWidgets(); // Initialize with default spacer
 		const viewport = createChatViewport({
+			tabBar: this.tabBarContainer,
 			document: this.documentContainer,
 			pendingMessages: this.pendingMessagesContainer,
 			status: this.statusContainer,
@@ -1020,6 +1057,7 @@ export class InteractiveMode {
 		this.transcriptScrollView = viewport.transcript;
 		this.fullscreenLayoutRoot = viewport.root;
 		this.mountInteractiveTui(this.renderer, [
+			this.tabBarContainer,
 			this.documentContainer,
 			this.pendingMessagesContainer,
 			this.statusContainer,
@@ -1290,14 +1328,19 @@ export class InteractiveMode {
 		}
 
 		// Main interactive loop
-		while (true) {
+		while (!this.isShuttingDown) {
 			const userInput = await this.getUserInput();
-			try {
-				await this.session.prompt(userInput);
-			} catch (error: unknown) {
-				const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
-				this.showError(errorMessage);
+			const activeSlot = this.tabManager?.getActiveTab();
+			if (!activeSlot) {
+				try {
+					await this.session.prompt(userInput);
+				} catch (error: unknown) {
+					const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
+					this.showError(errorMessage);
+				}
+				continue;
 			}
+			void this.executeTabPrompt(activeSlot, userInput);
 		}
 	}
 
@@ -2108,14 +2151,14 @@ export class InteractiveMode {
 				newSession: async (options) => {
 					this.clearStatusIndicator();
 					try {
-						return await this.runtimeHost.newSession(options);
+						return await this.activeTabRuntime.newSession(options);
 					} catch (error: unknown) {
 						return this.handleFatalRuntimeError("Failed to create session", error);
 					}
 				},
 				fork: async (entryId, options) => {
 					try {
-						const result = await this.runtimeHost.fork(entryId, options);
+						const result = await this.activeTabRuntime.fork(entryId, options);
 						if (!result.cancelled) {
 							this.editor.setText(result.selectedText ?? "");
 							this.showStatus("Forked to new session");
@@ -2240,6 +2283,197 @@ export class InteractiveMode {
 		await this.updateAvailableProviderCount();
 		this.updateEditorBorderColor();
 		this.updateTerminalTitle();
+	}
+
+	private configureTabRuntime(runtime: AgentSessionRuntime, _tabId: string): void {
+		runtime.setBeforeSessionInvalidate(() => {
+			if (this.tabManager?.getActiveTab()?.runtime === runtime) {
+				this.resetExtensionUI();
+			}
+		});
+		runtime.setRebindSession(async (newSession) => {
+			newSession.subscribe(async (event) => {
+				if (event.type === "agent_start" || event.type === "agent_end" || event.type === "agent_settled") {
+					this.refreshTabBar();
+					this.ui.requestRender();
+				}
+			});
+			if (this.tabManager?.getActiveTab()?.runtime === runtime) {
+				await this.rebindCurrentSession({ renderBeforeBind: true });
+				this.themeController.applyFromSettings();
+			}
+		});
+	}
+
+	private setupTabListeners(slot: TabSlot): void {
+		slot.session.subscribe(async (event) => {
+			if (event.type === "agent_start" || event.type === "agent_end" || event.type === "agent_settled") {
+				this.refreshTabBar();
+				this.ui.requestRender();
+			}
+		});
+	}
+
+	private async executeTabPrompt(slot: TabSlot, userInput: string): Promise<void> {
+		try {
+			await slot.session.prompt(userInput);
+		} catch (error: unknown) {
+			const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
+			if (this.tabManager.getActiveTab()?.id === slot.id) {
+				this.showError(errorMessage);
+			}
+		}
+	}
+
+	/** Switch the UI to render another tab's session. */
+	private async switchTab(id: string): Promise<void> {
+		const switched = await this.tabManager.switchTab(id);
+		if (!switched) return;
+		await this.rebindCurrentSession({ renderBeforeBind: true });
+		this.refreshTabBar();
+		this.ui.requestRender();
+	}
+
+	private async switchNextTab(): Promise<void> {
+		const nextId = this.tabManager.getNextTabId();
+		if (nextId) {
+			await this.switchTab(nextId);
+		}
+	}
+
+	private async switchPrevTab(): Promise<void> {
+		const prevId = this.tabManager.getPrevTabId();
+		if (prevId) {
+			await this.switchTab(prevId);
+		}
+	}
+
+	/** Open a new tab and switch to it. */
+	private async addTab(cwd?: string, name?: string): Promise<TabSlot> {
+		const active = this.tabManager.getActiveTab();
+		const targetCwd = cwd ?? active?.cwd ?? process.cwd();
+		const slot = await this.tabManager.addTab({ cwd: targetCwd, name });
+		this.setupTabListeners(slot);
+		await this.switchTab(slot.id);
+		return slot;
+	}
+
+	/** Close a tab (the last tab cannot be closed). */
+	private async closeTab(id: string): Promise<void> {
+		if (this.tabManager.getAllTabs().length <= 1) {
+			this.showError("Cannot close the last tab");
+			return;
+		}
+		const wasActive = this.tabManager.getActiveTab()?.id === id;
+		await this.tabManager.removeTab(id);
+		if (wasActive) {
+			const active = this.tabManager.getActiveTab();
+			if (active) {
+				await this.rebindCurrentSession({ renderBeforeBind: true });
+			}
+		}
+		this.refreshTabBar();
+		this.ui.requestRender();
+	}
+
+	private findTabBySpec(spec: string): TabSlot | undefined {
+		const tabs = this.tabManager.getAllTabs();
+		const byId = tabs.find((t) => t.id === spec);
+		if (byId) return byId;
+
+		const index = Number.parseInt(spec, 10);
+		if (!Number.isNaN(index) && index >= 1 && index <= tabs.length) {
+			return tabs[index - 1];
+		}
+
+		const lower = spec.toLowerCase();
+		return tabs.find((t) => t.name.toLowerCase() === lower);
+	}
+
+	private async handleTabCommand(text: string): Promise<void> {
+		const rawArgs = text.slice(4).trim();
+		const parts = rawArgs.split(/\s+/).filter(Boolean);
+		const subcommand = parts[0]?.toLowerCase();
+
+		if (!subcommand || subcommand === "list") {
+			const tabs = this.tabManager.getAllTabs();
+			const activeId = this.tabManager.getActiveTab()?.id;
+			const lines = tabs.map((tab, idx) => {
+				const activeMarker = tab.id === activeId ? "*" : " ";
+				const runningMarker = tab.session.isStreaming ? " (running)" : "";
+				return `  ${activeMarker} [${idx + 1}] ${tab.name} (${tab.id}) - ${tab.cwd}${runningMarker}`;
+			});
+			this.chatContainer.addChild(new Spacer(1));
+			this.chatContainer.addChild(
+				new ThemedText(() => `${theme.fg("accent", "Tabs:")}\n${lines.join("\n")}`, this.outputPad, 0),
+			);
+			this.chatContainer.addChild(new Spacer(1));
+			this.ui.requestRender();
+			return;
+		}
+
+		if (subcommand === "new") {
+			const cwdArg = parts[1];
+			const nameArg = parts.slice(2).join(" ") || undefined;
+			const resolvedCwd = cwdArg ? resolvePath(this.sessionManager.getCwd(), cwdArg) : undefined;
+			await this.addTab(resolvedCwd, nameArg);
+			this.showStatus(`Opened ${this.tabManager.getActiveTab()?.name}`);
+			return;
+		}
+
+		if (subcommand === "close") {
+			const spec = parts[1];
+			const target = spec ? this.findTabBySpec(spec) : this.tabManager.getActiveTab();
+			if (!target) {
+				this.showError(`Tab not found: ${spec}`);
+				return;
+			}
+			await this.closeTab(target.id);
+			return;
+		}
+
+		if (subcommand === "next") {
+			await this.switchNextTab();
+			return;
+		}
+
+		if (subcommand === "prev") {
+			await this.switchPrevTab();
+			return;
+		}
+
+		if (subcommand === "switch") {
+			const spec = parts[1];
+			if (!spec) {
+				this.showError("Usage: /tab switch <id|index|name>");
+				return;
+			}
+			const target = this.findTabBySpec(spec);
+			if (!target) {
+				this.showError(`Tab not found: ${spec}`);
+				return;
+			}
+			await this.switchTab(target.id);
+			return;
+		}
+
+		const target = this.findTabBySpec(subcommand);
+		if (target) {
+			await this.switchTab(target.id);
+			return;
+		}
+
+		this.showError(`Unknown /tab subcommand: ${subcommand}. Usage: /tab <new|close|switch|next|prev|list>`);
+	}
+
+	private refreshTabBar(): void {
+		this.tabBar?.setProps({
+			tabs: this.tabManager.getAllTabs(),
+			activeId: this.tabManager.getActiveTab()?.id,
+			onSwitch: (tabId) => void this.switchTab(tabId),
+			onAdd: () => void this.addTab(),
+			onClose: (tabId) => void this.closeTab(tabId),
+		});
 	}
 
 	private async handleFatalRuntimeError(prefix: string, error: unknown): Promise<never> {
@@ -3244,6 +3478,13 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
 		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
 		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
+		this.defaultEditor.onAction("app.tab.next", () => void this.switchNextTab());
+		this.defaultEditor.onAction("app.tab.prev", () => void this.switchPrevTab());
+		this.defaultEditor.onAction("app.tab.new", () => void this.addTab());
+		this.defaultEditor.onAction("app.tab.close", () => {
+			const active = this.tabManager?.getActiveTab();
+			if (active) void this.closeTab(active.id);
+		});
 
 		this.defaultEditor.onChange = (text: string) => {
 			const wasBashMode = this.isBashMode;
@@ -3423,7 +3664,7 @@ export class InteractiveMode {
 				}
 				this.clearStatusIndicator();
 				try {
-					const result = await this.runtimeHost.newSession({
+					const result = await this.activeTabRuntime.newSession({
 						cwd: targetPath,
 						projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
 					});
@@ -3455,6 +3696,11 @@ export class InteractiveMode {
 			if (text === "/logout") {
 				this.showOAuthSelector("logout");
 				this.editor.setText("");
+				return;
+			}
+			if (text === "/tab" || text.startsWith("/tab ")) {
+				this.editor.setText("");
+				await this.handleTabCommand(text);
 				return;
 			}
 			if (text === "/new") {
@@ -4518,7 +4764,9 @@ export class InteractiveMode {
 			// terminal. If the terminal is gone, the restore writes below emit EIO,
 			// which the stdout/stderr error handler turns into emergencyTerminalExit;
 			// the render loop is already idle, so this cannot hot-spin (see #4144).
-			await this.runtimeHost.dispose();
+			for (const slot of this.tabManager.getAllTabs()) {
+				await slot.runtime.dispose();
+			}
 			this.themeController.disableAutoSync();
 			await this.ui.terminal.drainInput(1000);
 			this.stop();
@@ -4534,7 +4782,9 @@ export class InteractiveMode {
 		await this.ui.terminal.drainInput(1000);
 
 		this.stop();
-		await this.runtimeHost.dispose();
+		for (const slot of this.tabManager.getAllTabs()) {
+			await slot.runtime.dispose();
+		}
 
 		const resumeCommand = formatResumeCommand(this.sessionManager);
 		if (resumeCommand) {
@@ -5520,7 +5770,7 @@ export class InteractiveMode {
 			return false;
 		}
 
-		const trustStore = new ProjectTrustStore(this.runtimeHost.services.agentDir);
+		const trustStore = new ProjectTrustStore(this.activeTabRuntime.services.agentDir);
 		try {
 			if (trustStore.get(cwd) !== null) {
 				this.autoTrustOnReloadCwd = undefined;
@@ -5539,7 +5789,7 @@ export class InteractiveMode {
 
 	private showTrustSelector(): void {
 		const cwd = this.sessionManager.getCwd();
-		const trustStore = new ProjectTrustStore(this.runtimeHost.services.agentDir);
+		const trustStore = new ProjectTrustStore(this.activeTabRuntime.services.agentDir);
 		const savedDecision = trustStore.getEntry(cwd);
 		this.showSelector((done) => {
 			const selector = new TrustSelectorComponent({
@@ -5736,7 +5986,7 @@ export class InteractiveMode {
 				async (entryId) => {
 					done();
 					try {
-						const result = await this.runtimeHost.fork(entryId);
+						const result = await this.activeTabRuntime.fork(entryId);
 						if (result.cancelled) {
 							this.ui.requestRender();
 							return;
@@ -5766,7 +6016,9 @@ export class InteractiveMode {
 		}
 
 		try {
-			const result = await this.runtimeHost.fork(leafId, { position: "at" });
+			const runtime = this.tabManager?.getActiveTab()?.runtime ?? this.runtimeHost;
+			if (!runtime) throw new Error("No active runtime");
+			const result = await runtime.fork(leafId, { position: "at" });
 			if (result.cancelled) {
 				this.ui.requestRender();
 				return;
@@ -5977,7 +6229,7 @@ export class InteractiveMode {
 	): Promise<{ cancelled: boolean }> {
 		this.clearStatusIndicator();
 		try {
-			const result = await this.runtimeHost.switchSession(sessionPath, {
+			const result = await this.activeTabRuntime.switchSession(sessionPath, {
 				withSession: options?.withSession,
 				projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
 			});
@@ -6004,6 +6256,16 @@ export class InteractiveMode {
 						this.showStatus("Resume cancelled");
 						return { cancelled: true };
 				}
+				const result = await this.activeTabRuntime.switchSession(sessionPath, {
+					cwdOverride: selectedCwd,
+					withSession: options?.withSession,
+					projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
+				});
+				if (result.cancelled) {
+					return result;
+				}
+				this.showStatus("Resumed session in current cwd");
+				return result;
 			}
 			return this.handleFatalRuntimeError("Failed to resume session", error);
 		}
@@ -6798,7 +7060,9 @@ export class InteractiveMode {
 
 		try {
 			this.clearStatusIndicator();
-			const result = await this.runtimeHost.importFromJsonl(inputPath);
+			const runtime = this.tabManager?.getActiveTab()?.runtime ?? this.runtimeHost;
+			if (!runtime) throw new Error("No active runtime");
+			const result = await runtime.importFromJsonl(inputPath);
 			if (result.cancelled) {
 				this.showStatus("Import cancelled");
 				return;
@@ -6821,6 +7085,15 @@ export class InteractiveMode {
 						this.showStatus("Import cancelled");
 						return;
 				}
+				const runtime = this.tabManager?.getActiveTab()?.runtime ?? this.runtimeHost;
+				if (!runtime) throw new Error("No active runtime");
+				const result = await runtime.importFromJsonl(inputPath, selectedCwd);
+				if (result.cancelled) {
+					this.showStatus("Import cancelled");
+					return;
+				}
+				this.showStatus(`Session imported from: ${inputPath}`);
+				return;
 			}
 			if (error instanceof SessionImportFileNotFoundError) {
 				this.showError(`Failed to import session: ${error.message}`);
@@ -7148,7 +7421,7 @@ export class InteractiveMode {
 	private async handleClearCommand(): Promise<void> {
 		this.clearStatusIndicator();
 		try {
-			const result = await this.runtimeHost.newSession();
+			const result = await this.activeTabRuntime.newSession();
 			if (result.cancelled) {
 				return;
 			}

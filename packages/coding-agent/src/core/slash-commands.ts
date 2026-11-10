@@ -34,6 +34,11 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "fork", description: "Create a new fork from a previous user message" },
 	{ name: "clone", description: "Duplicate the current session at the current position" },
 	{ name: "cd", description: "Switch to another workspace (working directory)", argumentHint: "<path>" },
+	{
+		name: "tab",
+		description: "Manage session tabs (new, close, switch, next, prev, list)",
+		argumentHint: "<new|close|switch|next|prev|list>",
+	},
 	{ name: "trust", description: "Save project trust decision for future sessions" },
 	{ name: "login", description: "Configure provider authentication", argumentHint: "<provider>" },
 	{ name: "logout", description: "Remove provider authentication" },

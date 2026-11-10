@@ -1,6 +1,7 @@
-import { type Component, ScrollView, type ScrollViewScrollbar, VStack } from "@earendil-works/pi-tui";
+import { type Component, ScrollView, type ScrollViewScrollbar, type StackChild, VStack } from "@earendil-works/pi-tui";
 
 export interface ChatViewportOptions {
+	readonly tabBar?: Component;
 	readonly document: Component;
 	readonly pendingMessages: Component;
 	readonly status: Component;
@@ -36,11 +37,16 @@ export function createChatViewport(options: ChatViewportOptions): ChatViewport {
 		...(options.widgetsBelow === undefined ? [] : [{ component: options.widgetsBelow, shrink: 1, minSize: 0 }]),
 		{ component: options.footer, shrink: 1, minSize: 0 },
 	]);
+	const rootChildren: StackChild[] = [];
+	if (options.tabBar !== undefined) {
+		rootChildren.push({ component: options.tabBar, basis: "auto", grow: 0, shrink: 0, minSize: 1 });
+	}
+	rootChildren.push(
+		{ component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+		{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
+	);
 	return {
 		transcript,
-		root: new VStack([
-			{ component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
-			{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
-		]),
+		root: new VStack(rootChildren),
 	};
 }

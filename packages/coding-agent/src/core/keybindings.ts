@@ -80,6 +80,22 @@ const APP_KEYBINDINGS = {
 	"app.session.tree": { defaultKeys: [], description: "Open session tree" },
 	"app.session.fork": { defaultKeys: [], description: "Fork current session" },
 	"app.session.resume": { defaultKeys: [], description: "Resume a session" },
+	"app.tab.next": {
+		defaultKeys: "ctrl+pageDown",
+		description: "Switch to next tab",
+	},
+	"app.tab.prev": {
+		defaultKeys: "ctrl+pageUp",
+		description: "Switch to previous tab",
+	},
+	"app.tab.new": {
+		defaultKeys: windowsKeybindings ? "alt+t" : "shift+ctrl+t",
+		description: "Open a new tab",
+	},
+	"app.tab.close": {
+		defaultKeys: windowsKeybindings ? "alt+w" : "shift+ctrl+w",
+		description: "Close active tab",
+	},
 	"app.tree.foldOrUp": {
 		defaultKeys: process.platform === "darwin" ? ["alt+left", "ctrl+left"] : ["ctrl+left", "alt+left"],
 		description: "Fold tree branch or move up",

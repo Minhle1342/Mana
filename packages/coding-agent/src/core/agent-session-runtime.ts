@@ -80,6 +80,11 @@ export class AgentSessionRuntime {
 	private _diagnostics: AgentSessionRuntimeDiagnostic[];
 	private _modelFallbackMessage?: string;
 
+	/** Factory used to create sibling runtimes for other cwd/workspace tabs. */
+	get createRuntimeFactory(): CreateAgentSessionRuntimeFactory {
+		return this.createRuntime;
+	}
+
 	constructor(
 		_session: AgentSession,
 		_services: AgentSessionServices,
