@@ -5,6 +5,7 @@ import {
 	defineFacet,
 	followNative,
 	forbidden,
+	isOwner,
 	type Location,
 	type Subscribable,
 	sameLocation,
@@ -93,7 +94,7 @@ export default defineFacet((host) => {
 			const privateRelative = denied?.startsWith(`${root.value.replace(/\/+$/, "")}/`)
 				? denied.slice(root.value.replace(/\/+$/, "").length + 1)
 				: undefined;
-			const workspace = new EnvironmentWorkspace(env, denied ? [denied] : []);
+			const workspace = new EnvironmentWorkspace(env, denied ? [denied] : [], conversation as ConversationId);
 			// The workspace answers before its watch is up: walking a large tree (a home folder) takes many seconds. A
 			// failed watch leaves the panel without live updates; once one is up, viewers read again (a change made before
 			// it would be missed otherwise).
@@ -309,14 +310,17 @@ export default defineFacet((host) => {
 				worker().liveness.call(async () =>
 					(await workspaceResource.value.current()).workspace.revertUndo(revertId, durableContext(ctx)),
 				),
-			dismissRevert: ({ revertId }) =>
+			dismissRevert: ({ revertId }, ctx) =>
 				worker().liveness.call(async () =>
-					(await workspaceResource.value.current()).workspace.dismissRevert(revertId),
+					(await workspaceResource.value.current()).workspace.dismissRevert(
+						revertId,
+						durableContext(signalOf(ctx)),
+					),
 				),
 		};
 	});
-	host.serve(SessionCheckpoints, ({ session, conversation }, principal, self) => {
-		if (!canSend(principal, session)) throw forbidden("participants only");
+	host.serve(SessionCheckpoints, ({ conversation }, principal, self) => {
+		if (!isOwner(principal)) throw forbidden("owner only");
 		const backend = self.get(WorkspaceBackend, { conversation });
 		return {
 			variant: "owner",

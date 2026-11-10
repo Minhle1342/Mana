@@ -909,7 +909,17 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 		[host, nav, sessionId, setDraft, setError],
 	);
 	const canBranch = owner && conversationId === session?.main;
-	const canUndo = canBranch;
+	const canUndo = canWrite && (!session?.main || conversationId === session.main);
+	// `transcript` and `busy` are declared here (before their original positions further down) so that `handleUndoConfirm`
+	// can reference `busy` in its dependency array without a temporal-dead-zone error. They are used read-only below.
+	const [pages, transcriptStore] = useTranscriptPages(cacheKey, chat);
+	const entryKinds = useRegistry(TranscriptEntries);
+	const display = useCallback((kind: string, data: unknown) => entryKinds.get(kind)?.(data), [entryKinds]);
+	const transcript = useMemo(
+		() => (pages ? buildTranscript(pages.view, display, pages.filling) : undefined),
+		[pages, display],
+	);
+	const busy = transcript?.busy ?? false;
 	const [undoTarget, setUndoTarget] = useState<{
 		entryId: number;
 		loading: boolean;
@@ -949,6 +959,7 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 	);
 	const handleUndoConfirm = useCallback(
 		async (entryId: number) => {
+			if (busy) throw new Error("Không thể undo khi một lượt đang chạy");
 			const held = host.hold(
 				SessionCheckpoints,
 				{ session: sessionId, conversation: conversationId },
@@ -970,7 +981,7 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 				held.release();
 			}
 		},
-		[conversationId, host, sessionId, setError],
+		[busy, conversationId, host, sessionId, setError],
 	);
 	const handleRevert = useCallback(
 		async (revertId: string) => {
@@ -1051,7 +1062,6 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 	);
 	// Who may write is known before the chat object is live (`canWrite`): drafts hold at once.
 	useRestoredDrafts(sessionId, conversationId, canWrite, restore);
-	const [pages, transcriptStore] = useTranscriptPages(cacheKey, chat);
 	// What this device kept starts the transcript; the live view is merged into it when it continues it.
 	useEffect(() => {
 		if (kept && transcriptStore) transcriptStore.seed(kept.view);
@@ -1065,13 +1075,6 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 		keep(cacheKey, () => ({ view: store.value!.view, sizes: [...keptSizes(cacheKey)] }));
 	}, [owner, liveView, pages, transcriptStore, cacheKey]);
 	const perform = useCallback((action: Promise<unknown> | undefined) => void action?.catch(fail), [fail]);
-	// Plugins show their own display-only entry kinds (chat-mode's chat messages) as people's messages.
-	const entryKinds = useRegistry(TranscriptEntries);
-	const display = useCallback((kind: string, data: unknown) => entryKinds.get(kind)?.(data), [entryKinds]);
-	const transcript = useMemo(
-		() => (pages ? buildTranscript(pages.view, display, pages.filling) : undefined),
-		[pages, display],
-	);
 	const stats = useReadable(chat?.stats) ?? undefined;
 	// Messages sent from here that the server does not show yet (outbox.ts): shown as they will look, a person's
 	// message at the end, or a queued input while a run is busy. An accepted one is shown by the server once the view
@@ -1084,7 +1087,6 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 	const newestEntry = view?.entries.at(-1)?.id ?? 0;
 	const newest = useRef(newestEntry);
 	newest.current = newestEntry;
-	const busy = transcript?.busy ?? false;
 	// Where each message's first send started: the newest entry then, and whether no run was busy (written by the sender).
 	const started = useRef(new Map<string, { after: number; idle: boolean }>()).current;
 	const queuedIds = useMemo(() => new Set(transcript?.queued.map((item) => item.id)), [transcript]);

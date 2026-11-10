@@ -351,6 +351,7 @@ function Incoming({ item }: { item: Extract<Item, { type: "user" }> }) {
 	const openPeer = useContext(OpenPeerConversation);
 	const reveal = useContext(RevealEntry);
 	const branch = useContext(BranchFrom);
+	const undoCheckpoint = useContext(UndoCheckpointContext);
 	const guest = item.author?.kind === "guest" ? item.author : undefined;
 	const reply = useReply(guest ? item.entryId : undefined, guest?.name ?? "");
 	const { agent, peer } = item;
@@ -378,6 +379,7 @@ function Incoming({ item }: { item: Extract<Item, { type: "user" }> }) {
 				};
 	// Only what reached the agent can be edited, and a subagent's message is the agent's, not a person's.
 	const entryId = item.chat || agent ? undefined : item.entryId;
+	const canUndo = undoCheckpoint && entryId !== undefined;
 	const line = (
 		<>
 			<span className="incoming-icon">{sender.icon}</span>
@@ -405,6 +407,17 @@ function Incoming({ item }: { item: Extract<Item, { type: "user" }> }) {
 				) : (
 					<div className="incoming-from">{line}</div>
 				)}
+				{canUndo && (
+					<button
+						type="button"
+						className="edit-button"
+						aria-label="Undo"
+						title="Undo: restore code changes to checkpoint before this message"
+						onClick={() => undoCheckpoint(entryId)}
+					>
+						<UndoIcon />
+					</button>
+				)}
 				{branch && entryId !== undefined && (
 					<button
 						type="button"
@@ -418,7 +431,17 @@ function Incoming({ item }: { item: Extract<Item, { type: "user" }> }) {
 				)}
 				{reply.button}
 			</div>
-			<div className="incoming-content" {...reply.gesture}>
+			{/* biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: the undo button in incoming-head is the keyboard control. */}
+			<div
+				className={`incoming-content${canUndo ? " undoable" : ""}`}
+				{...reply.gesture}
+				onClick={(e) => {
+					if (!canUndo) return;
+					if ((e.target as HTMLElement).closest("button, a, img")) return;
+					if (window.getSelection()?.toString()) return;
+					undoCheckpoint(entryId);
+				}}
+			>
 				{item.replyTo && (
 					<button
 						type="button"
@@ -486,6 +509,9 @@ function UserMessage({ item }: { item: Extract<Item, { type: "user" }> }) {
 	const edit = branch && entryId !== undefined;
 	const canUndo = undoCheckpoint && entryId !== undefined;
 	const text = item.text.trim();
+	// Long-press touch (500 ms) starts a reply gesture. A click right after it must not also open the undo modal.
+	const pressTime = useRef(0);
+	const longPress = useRef(false);
 	return (
 		<div className={`user ${item.chat ? "chat-message" : ""}`} data-entry={item.entryId}>
 			<div className="user-line">
@@ -494,8 +520,23 @@ function UserMessage({ item }: { item: Extract<Item, { type: "user" }> }) {
 				<div
 					className={`bubble${canUndo ? " undoable" : ""}`}
 					{...reply.gesture}
+					onPointerDown={(e) => {
+						reply.gesture.onPointerDown?.(e);
+						if (e.pointerType === "touch") {
+							pressTime.current = Date.now();
+							longPress.current = false;
+						}
+					}}
+					onPointerUp={(e) => {
+						reply.gesture.onPointerUp?.();
+						if (e.pointerType === "touch" && Date.now() - pressTime.current >= 500) longPress.current = true;
+					}}
 					onClick={(e) => {
 						if (!canUndo) return;
+						if (longPress.current) {
+							longPress.current = false;
+							return;
+						}
 						if ((e.target as HTMLElement).closest("button, a, img")) return;
 						if (window.getSelection()?.toString()) return;
 						undoCheckpoint(entryId);

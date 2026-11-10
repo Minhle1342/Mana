@@ -255,10 +255,9 @@ export default defineFacet((host) => {
 						attachments: (files ?? []).map(({ id, name }) => ({ id, name })),
 					};
 					const tail = (await current.entries({}, 1, undefined, ctx)).items[0]?.id ?? 0;
-					void self
+					await self
 						.get(WorkspaceBackend, { conversation: current.id })
-						.createCheckpoint({ entryId: tail + 1 }, ctx)
-						.catch(() => undefined);
+						.createCheckpoint({ entryId: tail + 1 }, ctx);
 					const submission = await current.submit(
 						{
 							type: "input",

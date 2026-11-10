@@ -54,13 +54,51 @@ export class Workspace {
 	readonly env: ExecutionEnv;
 	/** Canonical directories the panel must never expose, such as pi-mobile's private data. */
 	private readonly denied: readonly string[];
+	private readonly conversationId: number | undefined;
 	private root?: string;
 	private readonly checkpoints = new Map<number, string>();
 	private readonly reverts = new Map<string, string>();
 
-	constructor(env: ExecutionEnv, denied: readonly string[]) {
+	constructor(env: ExecutionEnv, denied: readonly string[], conversationId?: number) {
 		this.env = env;
 		this.denied = denied;
+		this.conversationId = conversationId;
+	}
+
+	/** Checkpoint ref namespace for one conversation, so two conversations sharing a repo never collide. */
+	private checkpointRefNamespace(): string {
+		if (this.conversationId === undefined) throw new Error("Workspace has no conversation");
+		return `refs/p2/checkpoints/${this.conversationId}`;
+	}
+
+	/** Revert ref namespace for one conversation. */
+	private revertRefNamespace(): string {
+		if (this.conversationId === undefined) throw new Error("Workspace has no conversation");
+		return `refs/p2/reverts/${this.conversationId}`;
+	}
+
+	/** Read a checkpoint ref from git when it is not in the in-memory map (survives worker restart). */
+	private async readCheckpointRef(entryId: number, context: Context): Promise<string | undefined> {
+		if (this.conversationId === undefined) return undefined;
+		const run = await this.git(
+			["rev-parse", `--verify`, `refs/p2/checkpoints/${this.conversationId}/${entryId}`],
+			4096,
+			context,
+		);
+		if (run.exitCode !== 0) return undefined;
+		return run.stdout.trim() || undefined;
+	}
+
+	/** Read a revert ref from git when it is not in the in-memory map. */
+	private async readRevertRef(revertId: string, context: Context): Promise<string | undefined> {
+		if (this.conversationId === undefined) return undefined;
+		const run = await this.git(
+			["rev-parse", "--verify", `refs/p2/reverts/${this.conversationId}/${revertId}`],
+			4096,
+			context,
+		);
+		if (run.exitCode !== 0) return undefined;
+		return run.stdout.trim() || undefined;
 	}
 
 	private async canonicalRoot(context: Context): Promise<string> {
@@ -954,13 +992,11 @@ export class Workspace {
 		return targets;
 	}
 
-	private async createSnapshot(message: string, context: Context): Promise<string | undefined> {
+	private async createSnapshot(message: string, context: Context): Promise<string> {
 		const isGit = await this.git(["rev-parse", "--is-inside-work-tree"], 1024, context);
-		if (isGit.exitCode !== 0) return undefined;
-		const gitDirRun = await this.git(["rev-parse", "--git-dir"], 1024, context);
-		if (gitDirRun.exitCode !== 0) return undefined;
-		const gitDir = gitDirRun.stdout.trim();
-		const tempIndex = `${gitDir}/pi_tmp_idx_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+		if (isGit.exitCode !== 0) throw new Error("Not inside a git worktree");
+		const root = await this.canonicalRoot(context);
+		const tempIndex = `${root === "/" ? "" : root}/pi_tmp_idx_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 		const extraEnv = { GIT_INDEX_FILE: tempIndex };
 
 		const head = await this.git(["rev-parse", "HEAD"], 1024, context);
@@ -972,7 +1008,9 @@ export class Workspace {
 			}
 			await this.git(["add", "-A"], 1024, context, undefined, undefined, extraEnv);
 			const writeTree = await this.git(["write-tree"], 1024, context, undefined, undefined, extraEnv);
-			if (writeTree.exitCode !== 0) return headRef;
+			if (writeTree.exitCode !== 0) {
+				throw new Error(`write-tree failed: ${writeTree.stderr || writeTree.stdout}`);
+			}
 
 			const tree = writeTree.stdout.trim();
 			const commitArgs = ["commit-tree", tree];
@@ -981,34 +1019,34 @@ export class Workspace {
 			}
 			commitArgs.push("-m", message);
 			const commitRun = await this.git(commitArgs, 1024, context, undefined, undefined, extraEnv);
-			return commitRun.exitCode === 0 ? commitRun.stdout.trim() : headRef;
+			if (commitRun.exitCode !== 0) {
+				throw new Error(`commit-tree failed: ${commitRun.stderr || commitRun.stdout}`);
+			}
+			return commitRun.stdout.trim();
 		} finally {
-			const abs = await this.resolve(tempIndex, context).catch(() => undefined);
+			const abs = await this.resolve(tempIndex.replace(`${root === "/" ? "" : root}/`, ""), context).catch(
+				() => undefined,
+			);
 			if (abs) await this.env.remove(abs, { force: true }, context).catch(() => undefined);
 		}
 	}
 
-	async createCheckpoint(entryId: number, context: Context): Promise<string | undefined> {
+	async createCheckpoint(entryId: number, context: Context): Promise<string> {
 		const ref = await this.createSnapshot(`checkpoint_${entryId}`, context);
-		if (ref) {
-			this.checkpoints.set(entryId, ref);
-			await this.git(["update-ref", `refs/p2/checkpoints/${entryId}`, ref], 1024, context).catch(() => undefined);
+		this.checkpoints.set(entryId, ref);
+		const run = await this.git(["update-ref", `${this.checkpointRefNamespace()}/${entryId}`, ref], 1024, context);
+		if (run.exitCode !== 0) {
+			throw new Error(`update-ref failed: ${run.stderr || run.stdout}`);
 		}
 		return ref;
 	}
 
-	private findCheckpoint(entryId: number): string | undefined {
+	private async findCheckpoint(entryId: number, context: Context): Promise<string | undefined> {
 		if (this.checkpoints.has(entryId)) return this.checkpoints.get(entryId);
-		let candidateId = -1;
-		let candidateRef: string | undefined;
-		for (const [id, ref] of this.checkpoints.entries()) {
-			if (id <= entryId && id > candidateId) {
-				candidateId = id;
-				candidateRef = ref;
-			}
-		}
-		if (candidateRef) return candidateRef;
-		for (const ref of this.checkpoints.values()) {
+		if (this.conversationId === undefined) return undefined;
+		const ref = await this.readCheckpointRef(entryId, context);
+		if (ref) {
+			this.checkpoints.set(entryId, ref);
 			return ref;
 		}
 		return undefined;
@@ -1021,16 +1059,10 @@ export class Workspace {
 		const entryId = typeof target === "number" ? target : target.entryId;
 		const isGit = await this.git(["rev-parse", "--is-inside-work-tree"], 1024, context);
 		if (isGit.exitCode !== 0) return { hasCheckpoint: false, added: 0, deleted: 0 };
-		let checkpointRef = this.findCheckpoint(entryId);
-		if (!checkpointRef) {
-			const head = await this.git(["rev-parse", "HEAD"], 4096, context);
-			if (head.exitCode === 0) checkpointRef = head.stdout.trim();
-		}
+		const checkpointRef = await this.findCheckpoint(entryId, context);
 		if (!checkpointRef) return { hasCheckpoint: false, added: 0, deleted: 0 };
 
 		const currentRef = await this.createSnapshot("temp_diff_check", context);
-		if (!currentRef) return { hasCheckpoint: true, added: 0, deleted: 0 };
-
 		const run = await this.git(
 			["diff", "--numstat", "--no-color", "--ignore-submodules=dirty", checkpointRef, currentRef, "--", "."],
 			DIFF_BYTES,
@@ -1063,14 +1095,10 @@ export class Workspace {
 		context: Context,
 	): Promise<{ revertId: string; revertAdded: number; revertDeleted: number }> {
 		const entryId = typeof target === "number" ? target : target.entryId;
-		let checkpointRef = this.findCheckpoint(entryId);
-		if (!checkpointRef) {
-			const head = await this.git(["rev-parse", "HEAD"], 4096, context);
-			if (head.exitCode === 0) checkpointRef = head.stdout.trim();
-		}
+		const checkpointRef = await this.findCheckpoint(entryId, context);
 		if (!checkpointRef) throw new Error("No checkpoint found for undo");
 
-		const revertRef = (await this.createSnapshot(`revert_snapshot_${Date.now()}`, context)) ?? checkpointRef;
+		const revertRef = await this.createSnapshot(`revert_snapshot_${Date.now()}`, context);
 
 		const diff = await this.git(
 			["diff", "--numstat", "--no-color", "--ignore-submodules=dirty", checkpointRef, revertRef, "--", "."],
@@ -1092,28 +1120,55 @@ export class Workspace {
 			}
 		}
 
-		await this.git(["checkout", checkpointRef, "--", "."], 64 * 1024, context);
-		await this.git(["clean", "-fd"], 64 * 1024, context).catch(() => undefined);
+		const checkout = await this.git(["checkout", checkpointRef, "--", "."], 64 * 1024, context);
+		if (checkout.exitCode !== 0) {
+			throw new Error(`checkout failed: ${checkout.stderr || checkout.stdout}`);
+		}
+		// `clean -fd` chỉ được chạy khi checkout thành công; nếu checkout lỗi, dừng lại để không xoá
+		// công việc chưa commit của người dùng. File untracked sinh ra sau checkpoint sẽ bị xoá;
+		// file tồn tại trước checkpoint đã có trong cây snapshot nên checkout khôi phục lại.
+		const clean = await this.git(["clean", "-fd"], 64 * 1024, context);
+		if (clean.exitCode !== 0) {
+			throw new Error(`clean failed: ${clean.stderr || clean.stdout}`);
+		}
 
 		const revertId = `revert_${Date.now()}`;
-		this.reverts.set(revertId, revertRef);
+		const revertRefStr = revertRef;
+		this.reverts.set(revertId, revertRefStr);
+		const run = await this.git(
+			["update-ref", `${this.revertRefNamespace()}/${revertId}`, revertRefStr],
+			1024,
+			context,
+		);
+		if (run.exitCode !== 0) {
+			throw new Error(`update-ref failed: ${run.stderr || run.stdout}`);
+		}
 		return { revertId, revertAdded, revertDeleted };
 	}
 
 	async revertUndo(target: string | { revertId: string }, context: Context): Promise<{ success: boolean }> {
 		const revertId = typeof target === "string" ? target : target.revertId;
-		const revertRef = this.reverts.get(revertId);
-		if (!revertRef) return { success: false };
+		let revertRef = this.reverts.get(revertId);
+		if (!revertRef) {
+			revertRef = await this.readRevertRef(revertId, context);
+			if (!revertRef) return { success: false };
+			this.reverts.set(revertId, revertRef);
+		}
 
-		await this.git(["checkout", revertRef, "--", "."], 64 * 1024, context);
+		const checkout = await this.git(["checkout", revertRef, "--", "."], 64 * 1024, context);
+		if (checkout.exitCode !== 0) {
+			throw new Error(`checkout failed: ${checkout.stderr || checkout.stdout}`);
+		}
 
 		this.reverts.delete(revertId);
 		return { success: true };
 	}
 
-	dismissRevert(target: string | { revertId: string }, _context?: Context): { success: boolean } {
+	async dismissRevert(target: string | { revertId: string }, context: Context): Promise<{ success: boolean }> {
 		const revertId = typeof target === "string" ? target : target.revertId;
 		this.reverts.delete(revertId);
+		if (this.conversationId === undefined) return { success: true };
+		await this.git(["update-ref", "-d", `${this.revertRefNamespace()}/${revertId}`], 1024, context).catch(() => {});
 		return { success: true };
 	}
 }
