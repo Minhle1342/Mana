@@ -27,6 +27,7 @@ Extensions, prompt templates, and skills can add commands. The command menu in P
 | `/tree` | Navigate the session tree |
 | `/fork` | Create a new session from an earlier user message |
 | `/clone` | Duplicate the current session at its current position |
+| `/cd <path>` | Switch to another workspace (working directory) |
 | `/compact [instructions]` | Compact the current context, optionally with custom instructions |
 | `/import <path>` | Import a JSONL session, preserving its ID and working directory |
 

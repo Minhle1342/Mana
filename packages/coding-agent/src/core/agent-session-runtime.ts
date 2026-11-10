@@ -1,4 +1,4 @@
-import { constants, copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { constants, copyFileSync, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { basename, join, parse } from "node:path";
 import { pathsEqual, resolvePath } from "../utils/paths.ts";
 import type { AgentSession } from "./agent-session.ts";
@@ -224,10 +224,20 @@ export class AgentSessionRuntime {
 	}
 
 	async newSession(options?: {
+		cwd?: string;
+		projectTrustContextFactory?: (cwd: string) => ProjectTrustContext;
 		parentSession?: string;
 		setup?: (sessionManager: SessionManager) => Promise<void>;
 		withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
 	}): Promise<{ cancelled: boolean }> {
+		// Validate the target workspace before touching the current session so a
+		// bad path never tears down the outgoing session.
+		const targetCwd = options?.cwd ?? this.cwd;
+		const resolvedTargetCwd = resolvePath(targetCwd, this.cwd);
+		if (!existsSync(resolvedTargetCwd) || !statSync(resolvedTargetCwd).isDirectory()) {
+			throw new Error(`Not a directory: ${resolvedTargetCwd}`);
+		}
+
 		const beforeResult = await this.emitBeforeSwitch("new");
 		if (beforeResult.cancelled) {
 			return beforeResult;
@@ -235,9 +245,17 @@ export class AgentSessionRuntime {
 
 		const previousSessionFile = this.session.sessionFile;
 		const sessionDir = this.session.sessionManager.getSessionDir();
-		const sessionManager = this.session.sessionManager.isPersisted()
-			? SessionManager.create(this.cwd, sessionDir)
-			: SessionManager.inMemory(this.cwd);
+		let sessionManager: SessionManager;
+		if (pathsEqual(resolvedTargetCwd, this.cwd)) {
+			sessionManager = this.session.sessionManager.isPersisted()
+				? SessionManager.create(this.cwd, sessionDir)
+				: SessionManager.inMemory(this.cwd);
+		} else {
+			// New workspace: use the default per-cwd session directory, preserving persistence mode.
+			sessionManager = this.session.sessionManager.isPersisted()
+				? SessionManager.create(resolvedTargetCwd, undefined)
+				: SessionManager.inMemory(resolvedTargetCwd);
+		}
 		if (options?.parentSession) {
 			sessionManager.newSession({ parentSession: options.parentSession });
 		}
@@ -245,10 +263,11 @@ export class AgentSessionRuntime {
 		await this.teardownCurrent("new", sessionManager.getSessionFile());
 		this.apply(
 			await this.createRuntime({
-				cwd: this.cwd,
+				cwd: resolvedTargetCwd,
 				agentDir: this.services.agentDir,
 				sessionManager,
 				sessionStartEvent: { type: "session_start", reason: "new", previousSessionFile },
+				projectTrustContext: options?.projectTrustContextFactory?.(resolvedTargetCwd),
 			}),
 		);
 		if (options?.setup) {

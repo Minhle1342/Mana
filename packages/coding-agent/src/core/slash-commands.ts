@@ -33,6 +33,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "hotkeys", description: "Show all keyboard shortcuts" },
 	{ name: "fork", description: "Create a new fork from a previous user message" },
 	{ name: "clone", description: "Duplicate the current session at the current position" },
+	{ name: "cd", description: "Switch to another workspace (working directory)", argumentHint: "<path>" },
 	{ name: "trust", description: "Save project trust decision for future sessions" },
 	{ name: "login", description: "Configure provider authentication", argumentHint: "<provider>" },
 	{ name: "logout", description: "Remove provider authentication" },

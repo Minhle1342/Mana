@@ -317,6 +317,138 @@ describe("AgentSessionRuntime characterization", () => {
 		]);
 	});
 
+	it("switches cwd when newSession is given a different directory", async () => {
+		const events: RecordedSessionEvent[] = [];
+		const { runtime, tempDir } = await createRuntimeForTest((pi: ExtensionAPI) => {
+			pi.on("session_start", (event) => {
+				events.push(event);
+			});
+		});
+
+		const originalCwd = runtime.cwd;
+		const otherDir = join(tempDir, "other-workspace");
+		mkdirSync(otherDir, { recursive: true });
+
+		events.length = 0;
+		const result = await runtime.newSession({ cwd: otherDir });
+		expect(result.cancelled).toBe(false);
+		expect(runtime.cwd).toBe(otherDir);
+		expect(runtime.cwd).not.toBe(originalCwd);
+		expect(runtime.session.sessionManager.getCwd()).toBe(otherDir);
+	});
+
+	it("resolves relative cwd against the active runtime workspace", async () => {
+		const { runtime, tempDir } = await createRuntimeForTest(() => {});
+		const nestedDir = join(runtime.cwd, "nested-subfolder");
+		mkdirSync(nestedDir, { recursive: true });
+
+		const result = await runtime.newSession({ cwd: "nested-subfolder" });
+		expect(result.cancelled).toBe(false);
+		expect(runtime.cwd).toBe(nestedDir);
+
+		const resultParent = await runtime.newSession({ cwd: ".." });
+		expect(resultParent.cancelled).toBe(false);
+		expect(runtime.cwd).toBe(tempDir);
+	});
+
+	it("preserves in-memory session mode when switching cwd", async () => {
+		const tempDir = join(tmpdir(), `pi-runtime-suite-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(tempDir, { recursive: true });
+
+		const faux = registerFauxProvider({
+			models: [{ id: "faux-1", reasoning: true }],
+		});
+		faux.setResponses([fauxAssistantMessage("one")]);
+
+		const authStorage = AuthStorage.inMemory();
+		await authStorage.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "faux-key" }));
+
+		const runtimeOptions = {
+			agentDir: tempDir,
+			authStorage,
+			model: faux.getModel(),
+			resourceLoaderOptions: {
+				extensionFactories: [
+					(pi: ExtensionAPI) => {
+						pi.registerProvider(faux.getModel().provider, {
+							baseUrl: faux.getModel().baseUrl,
+							apiKey: "faux-key",
+							api: faux.api,
+							models: faux.models.map((m) => ({
+								id: m.id,
+								name: m.name,
+								api: m.api,
+								reasoning: m.reasoning,
+								input: m.input,
+								cost: m.cost,
+								contextWindow: m.contextWindow,
+								maxTokens: m.maxTokens,
+							})),
+						});
+					},
+				],
+				noSkills: true,
+				noPromptTemplates: true,
+				noThemes: true,
+			},
+		};
+
+		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+			const services = await createAgentSessionServices({ ...runtimeOptions, cwd });
+			return {
+				...(await createAgentSessionFromServices({
+					services,
+					sessionManager,
+					sessionStartEvent,
+					model: runtimeOptions.model,
+				})),
+				services,
+				diagnostics: services.diagnostics,
+			};
+		};
+
+		const memoryRuntime = await createAgentSessionRuntime(createRuntime, {
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.inMemory(tempDir),
+		});
+		cleanups.push(async () => {
+			await memoryRuntime.dispose();
+			faux.unregister();
+			if (existsSync(tempDir)) {
+				rmSync(tempDir, { recursive: true, force: true });
+			}
+		});
+
+		expect(memoryRuntime.session.sessionManager.isPersisted()).toBe(false);
+
+		const otherDir = join(tempDir, "other-workspace-mem");
+		mkdirSync(otherDir, { recursive: true });
+
+		const result = await memoryRuntime.newSession({ cwd: otherDir });
+		expect(result.cancelled).toBe(false);
+		expect(memoryRuntime.cwd).toBe(otherDir);
+		expect(memoryRuntime.session.sessionManager.isPersisted()).toBe(false);
+	});
+
+	it("preserves the session directory when cwd is unchanged", async () => {
+		const { runtime } = await createRuntimeForTest(() => {});
+		const sessionDir = runtime.session.sessionManager.getSessionDir();
+
+		await runtime.newSession({ cwd: runtime.cwd });
+
+		expect(runtime.session.sessionManager.getSessionDir()).toBe(sessionDir);
+	});
+
+	it("rejects a non-directory cwd before tearing down the current session", async () => {
+		const { runtime, tempDir } = await createRuntimeForTest(() => {});
+		const originalSessionFile = runtime.session.sessionFile;
+		const notADir = join(tempDir, "not-a-dir");
+
+		await expect(runtime.newSession({ cwd: notADir })).rejects.toThrow(/Not a directory/);
+		expect(runtime.session.sessionFile).toBe(originalSessionFile);
+	});
+
 	it("honors session_before_switch cancellation for new and resume", async () => {
 		const events: RecordedSessionEvent[] = [];
 		let cancelReason: "new" | "resume" | undefined;

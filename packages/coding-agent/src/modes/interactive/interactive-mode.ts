@@ -3405,6 +3405,37 @@ export class InteractiveMode {
 				await this.handleCloneCommand();
 				return;
 			}
+			if (text === "/cd" || text.startsWith("/cd ")) {
+				const targetPath = this.getPathCommandArgument(text, "/cd");
+				if (!targetPath) {
+					this.showError("Usage: /cd <path>");
+					this.editor.setText("");
+					return;
+				}
+				this.editor.setText("");
+				if (this.session.isStreaming) {
+					this.showWarning("Wait for the current response to finish before switching workspace.");
+					return;
+				}
+				if (this.session.isCompacting) {
+					this.showWarning("Wait for compaction to finish before switching workspace.");
+					return;
+				}
+				this.clearStatusIndicator();
+				try {
+					const result = await this.runtimeHost.newSession({
+						cwd: targetPath,
+						projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
+					});
+					if (result.cancelled) {
+						return;
+					}
+					this.showStatus(`Switched workspace to: ${this.sessionManager.getCwd()}`);
+				} catch (error: unknown) {
+					this.showError(`Failed to switch workspace: ${error instanceof Error ? error.message : String(error)}`);
+				}
+				return;
+			}
 			if (text === "/tree") {
 				this.showTreeSelector();
 				this.editor.setText("");
@@ -6723,7 +6754,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private getPathCommandArgument(text: string, command: "/export" | "/import"): string | undefined {
+	private getPathCommandArgument(text: string, command: string): string | undefined {
 		if (text === command) {
 			return undefined;
 		}
