@@ -3,6 +3,9 @@
 // for conversation 1) and renaming them, and following a switch made elsewhere.
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@p2/app/v1";
 import { Chat } from "../../plugins/chat/contract.ts";
@@ -155,5 +158,95 @@ describe("branches in the browser", { skip: !browserTests }, () => {
 		await tree.select({ conversation: 1 }, BACKGROUND_CONTEXT);
 		await browser.wait(`location.pathname==='/s/${id}'`);
 		await browser.wait(`document.querySelector('.messages')?.textContent.includes('Echo: second')`);
+	});
+});
+
+// Clicking a user message bubble opens the Undo confirmation modal. Confirming restores the
+// workspace to the checkpoint and shows the Revert banner above the Composer; clicking the
+// banner restores the undone changes.
+describe("undo and revert a user turn in the browser", { skip: !browserTests }, () => {
+	let fixture: Fixture, browser: Browser, id: string;
+
+	const send = async (conversation: number, text: string) => {
+		const chat = await holdIn(fixture.browser(), Chat, { session: id, conversation }, "participant");
+		await chat.send({ text, requestId: `${conversation}:${text}` }, BACKGROUND_CONTEXT);
+		await until(chat.view, (view) => !(view?.docs["pi.live"] as { run?: unknown } | undefined)?.run);
+		chat.release();
+	};
+
+	before(async () => {
+		fixture = await startFixture({ web: true });
+		// Checkpointing requires a git repository; init one and commit a file so a checkpoint can be taken.
+		execFileSync("git", ["init", "-q"], { cwd: fixture.workspace });
+		await writeFile(join(fixture.workspace, "file.txt"), "line1\nline2\nline3\n");
+		execFileSync(
+			"git",
+			[
+				"-c",
+				"user.name=Test",
+				"-c",
+				"user.email=test@example.invalid",
+				"-c",
+				"commit.gpgsign=false",
+				"add",
+				"file.txt",
+			],
+			{ cwd: fixture.workspace },
+		);
+		execFileSync(
+			"git",
+			[
+				"-c",
+				"user.name=Test",
+				"-c",
+				"user.email=test@example.invalid",
+				"-c",
+				"commit.gpgsign=false",
+				"commit",
+				"-q",
+				"-m",
+				"init",
+			],
+			{ cwd: fixture.workspace },
+		);
+		const sessions = await holdIn(fixture.browser(), Sessions, {}, "owner");
+		id = (await sessions.create({ cwd: fixture.workspace, title: "Undo" }, BACKGROUND_CONTEXT)).id;
+		// Submitting the user message auto-creates a checkpoint for its entry (chat/worker.ts submit).
+		await send(1, "first");
+		// Simulate the agent editing the file after the turn's checkpoint was taken.
+		await writeFile(join(fixture.workspace, "file.txt"), "line1\nchanged\nline3\n");
+		browser = await Browser.start();
+		await browser.signIn(fixture.owner);
+	});
+
+	after(async () => {
+		await browser?.close();
+		await fixture?.close();
+	});
+
+	it("clicking the user bubble opens the Undo modal, and reverting restores the changes", async () => {
+		await browser.metrics(1280, 900);
+		await browser.open(`http://127.0.0.1:${fixture.server.port}/s/${id}`);
+		await browser.wait(`document.querySelector('.messages')?.textContent.includes('Echo: first')`);
+
+		// Click the user message bubble: the Undo confirmation modal opens with +/- diff badges.
+		await browser.evaluate(
+			`[...document.querySelectorAll('.user')].find(e=>e.textContent.includes('first')).querySelector('.bubble').click()`,
+		);
+		await browser.wait(`document.querySelector('.sheet.undo-modal')`);
+		assert.equal(await browser.evaluate<boolean>(`!!document.querySelector('.diff-badge.add')`), true);
+		assert.equal(await browser.evaluate<boolean>(`!!document.querySelector('.diff-badge.del')`), true);
+
+		// Confirm undo: the workspace is restored to the checkpoint and the Revert banner appears above the Composer.
+		await browser.evaluate(
+			`[...document.querySelectorAll('.sheet button')].find(e=>e.textContent.trim()==='Yes').click()`,
+		);
+		await browser.wait(`document.querySelector('.revert-banner')`);
+		assert.equal(await browser.evaluate<boolean>(`!!document.querySelector('.revert-banner')`), true);
+
+		// Click the Revert banner: the undone changes come back and the banner disappears.
+		await browser.evaluate(`document.querySelector('.revert-banner-button').click()`);
+		await browser.wait(`!document.querySelector('.revert-banner')`);
+		assert.equal(await browser.evaluate<boolean>(`!!document.querySelector('.revert-banner')`), false);
 	});
 });

@@ -1124,10 +1124,10 @@ export class Workspace {
 		if (checkout.exitCode !== 0) {
 			throw new Error(`checkout failed: ${checkout.stderr || checkout.stdout}`);
 		}
-		// `clean -fd` chỉ được chạy khi checkout thành công; nếu checkout lỗi, dừng lại để không xoá
-		// công việc chưa commit của người dùng. File untracked sinh ra sau checkpoint sẽ bị xoá;
-		// file tồn tại trước checkpoint đã có trong cây snapshot nên checkout khôi phục lại.
-		const clean = await this.git(["clean", "-fd"], 64 * 1024, context);
+		// `clean -fd` chỉ được chạy khi checkout thành công và chỉ trong phạm vi thư mục làm việc
+		// của cuộc trò chuyện này (`root` là per-conversation, không phải gốc của một monorepo cha).
+		// Nếu checkout lỗi, dừng lại để không xoá công việc chưa commit của người dùng.
+		const clean = await this.git(["clean", "-fd", "--", "."], 64 * 1024, context);
 		if (clean.exitCode !== 0) {
 			throw new Error(`clean failed: ${clean.stderr || clean.stdout}`);
 		}
@@ -1159,8 +1159,17 @@ export class Workspace {
 		if (checkout.exitCode !== 0) {
 			throw new Error(`checkout failed: ${checkout.stderr || checkout.stdout}`);
 		}
+		// Dọn các file untracked sinh ra sau undo để khôi phục đúng trạng thái trước khi undo,
+		// scoped vào thư mục của cuộc trò chuyện này.
+		const clean = await this.git(["clean", "-fd", "--", "."], 64 * 1024, context);
+		if (clean.exitCode !== 0) {
+			throw new Error(`clean failed: ${clean.stderr || clean.stdout}`);
+		}
 
 		this.reverts.delete(revertId);
+		if (this.conversationId !== undefined) {
+			await this.git(["update-ref", "-d", `${this.revertRefNamespace()}/${revertId}`], 1024, context);
+		}
 		return { success: true };
 	}
 

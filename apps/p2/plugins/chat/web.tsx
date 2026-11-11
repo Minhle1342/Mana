@@ -909,7 +909,7 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 		[host, nav, sessionId, setDraft, setError],
 	);
 	const canBranch = owner && conversationId === session?.main;
-	const canUndo = canWrite && (!session?.main || conversationId === session.main);
+	const canUndo = owner && (!session?.main || conversationId === session.main);
 	// `transcript` and `busy` are declared here (before their original positions further down) so that `handleUndoConfirm`
 	// can reference `busy` in its dependency array without a temporal-dead-zone error. They are used read-only below.
 	const [pages, transcriptStore] = useTranscriptPages(cacheKey, chat);
@@ -985,6 +985,7 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 	);
 	const handleRevert = useCallback(
 		async (revertId: string) => {
+			if (busy) throw new Error("Không thể revert khi một lượt đang chạy");
 			const held = host.hold(
 				SessionCheckpoints,
 				{ session: sessionId, conversation: conversationId },
@@ -1002,10 +1003,11 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 				held.release();
 			}
 		},
-		[conversationId, host, sessionId, setError],
+		[busy, conversationId, host, sessionId, setError],
 	);
 	const handleDismissRevert = useCallback(
 		(revertId: string) => {
+			if (busy) return;
 			const held = host.hold(
 				SessionCheckpoints,
 				{ session: sessionId, conversation: conversationId },
@@ -1022,18 +1024,18 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 					held.release();
 				});
 		},
-		[conversationId, host, sessionId],
+		[busy, conversationId, host, sessionId],
 	);
 
 	/** `/undo`: ho.revert sang checkpoint của lượt người dùng gần nhất; `/revert`: khôi phục lại trạng thái trước khi undo. */
 	async function handleSlashCommand(text: string) {
-		if (busy) throw new Error("Không thể dùng lệnh slash khi một lượt đang chạy");
 		const held = host.hold(
 			SessionCheckpoints,
 			{ session: sessionId, conversation: conversationId },
 			BACKGROUND_CONTEXT,
 		);
 		try {
+			if (busy) throw new Error("Không thể dùng lệnh slash khi một lượt đang chạy");
 			await whenLive(held);
 			const checkpoints = liveIn(held, "owner");
 			if (!checkpoints) throw new Error("Only the owner uses checkpoint commands");
