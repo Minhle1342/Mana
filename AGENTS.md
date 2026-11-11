@@ -92,9 +92,14 @@ Committing:
 - `packages/ai/src/models.generated.ts` may always be included alongside your files.
 - Message format: `{feat,fix,docs}[(ai,tui,agent,coding-agent)]: <commit message> (optionally multiple lines)`. Message is informative and concise.
 
+Pushing:
+
+- Every push goes to `myfork/main` (`git push myfork main`). `origin` is the upstream repository and rejects pushes without permission.
+
 Never run (destroys other agents' work or bypasses checks):
 
 - `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, `git add -A`, `git add .`, `git commit --no-verify`.
+- `git push origin`.
 
 If rebase conflicts occur:
 
