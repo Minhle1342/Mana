@@ -1,4 +1,4 @@
-import type { Component, TuiMouseEvent } from "@earendil-works/pi-tui";
+import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { Container, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { manaLogoLines } from "../src/modes/interactive/components/pi-logo.ts";
@@ -8,7 +8,7 @@ import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 function mockEditor(
 	lines: string[],
-	handleMouse?: (event: TuiMouseEvent) => any,
+	handleMouse?: (event: TuiMouseEvent) => TuiMouseEventResult | undefined,
 	handleInput?: (data: string) => void,
 ): Component {
 	return {
@@ -213,6 +213,127 @@ describe("StartScreen", () => {
 		} as TuiMouseEvent;
 		screen.handleMouse(event);
 		expect(onLogoClick).toHaveBeenCalledWith(25, 11);
+	});
+
+	it("does not trigger onLogoClick on non-click or non-left-click mouse events", () => {
+		const onLogoClick = vi.fn();
+		const screen = new StartScreen({
+			logoLines: manaLogoLines(),
+			editor: mockEditor(["> "]),
+			footer: mockFooter(),
+			getHeight: () => 30,
+			onLogoClick,
+		});
+		screen.render(80);
+
+		const baseEvent = {
+			button: "none" as const,
+			x: 25,
+			y: 11,
+			screenX: 25,
+			screenY: 11,
+			width: 80,
+			height: 30,
+			shift: false,
+			alt: false,
+			ctrl: false,
+		};
+
+		// Mouse move
+		screen.handleMouse({ ...baseEvent, type: "move" });
+		// Mouse wheel
+		screen.handleMouse({ ...baseEvent, type: "wheel", wheelDelta: -1 });
+		// Mouse press (drag start)
+		screen.handleMouse({ ...baseEvent, type: "press", button: "left" });
+		// Right click
+		screen.handleMouse({ ...baseEvent, type: "click", button: "right" });
+
+		expect(onLogoClick).not.toHaveBeenCalled();
+	});
+
+	it("does not trigger onLogoClick in ghost region when logo collapses to wordmark", () => {
+		const onLogoClick = vi.fn();
+		const screen = new StartScreen({
+			logoLines: manaLogoLines(),
+			editor: mockEditor(["> "]),
+			footer: mockFooter(),
+			getHeight: () => 30,
+			onLogoClick,
+		});
+		// Render in width 20 -> collapses to wordmark "Mana" (width 4, centered at left = (20 - 4)/2 = 8)
+		screen.render(20);
+
+		const clickEvent = (x: number) =>
+			({
+				type: "click",
+				button: "left",
+				x,
+				y: 14, // topSpacer for 30 rows with 2 lines is 14
+				screenX: x,
+				screenY: 14,
+				width: 20,
+				height: 30,
+				shift: false,
+				alt: false,
+				ctrl: false,
+			}) as TuiMouseEvent;
+
+		// Click inside wordmark bounds [8..12) -> triggers
+		screen.handleMouse(clickEvent(9));
+		expect(onLogoClick).toHaveBeenCalledTimes(1);
+
+		// Click outside wordmark bounds [12..20) -> ghost region, should NOT trigger
+		screen.handleMouse(clickEvent(15));
+		expect(onLogoClick).toHaveBeenCalledTimes(1);
+	});
+
+	it("forwards mouse events to footer when clicking inside footer range", () => {
+		const footerMouse = vi.fn();
+		const screen = new StartScreen({
+			logoLines: manaLogoLines(),
+			editor: mockEditor(["> "]),
+			footer: mockEditor(["Footer Line"], footerMouse),
+			getHeight: () => 30,
+		});
+		screen.render(80);
+		// content: logo (6) + editor (1) + footer (1) = 8. topSpacer = 11.
+		// logo: 11..16, editor: 17, footer: 18.
+		const event = {
+			type: "click",
+			button: "left",
+			x: 10,
+			y: 18,
+			screenX: 10,
+			screenY: 18,
+			width: 80,
+			height: 30,
+			shift: false,
+			alt: false,
+			ctrl: false,
+		} as TuiMouseEvent;
+		screen.handleMouse(event);
+		expect(footerMouse).toHaveBeenCalledWith(
+			expect.objectContaining({
+				x: 10,
+				y: 0,
+				height: 1,
+			}),
+		);
+	});
+
+	it("supports getProps and setProps", () => {
+		const props = {
+			logoLines: manaLogoLines(),
+			editor: mockEditor(["> "]),
+			footer: mockFooter(),
+			getHeight: () => 30,
+		};
+		const screen = new StartScreen(props);
+		expect(screen.getProps()).toBe(props);
+
+		const updatedProps = { ...props, getHeight: () => 40 };
+		screen.setProps(updatedProps);
+		expect(screen.getProps().getHeight()).toBe(40);
 	});
 
 	it("renders selector content when editor is a Container holding a selector", () => {
@@ -434,22 +555,87 @@ describe("InteractiveMode.isStartScreenVisible", () => {
 		expect(proto.isStartScreenVisible.call(ctx)).toBe(false);
 	});
 
+	it("handles session with undefined sessionManager or messages without throwing", () => {
+		const ctx: StartScreenContext = {
+			tabManager: {
+				getActiveTab: () => ({
+					session: { isStreaming: false },
+				}),
+			},
+		};
+		expect(proto.isStartScreenVisible.call(ctx)).toBe(true);
+	});
+
 	it("initializes showStartScreen as undefined so initial sync always mounts layout", () => {
+		const imProto = InteractiveMode.prototype as unknown as {
+			syncStartScreen(this: {
+				showStartScreen?: boolean;
+				isStartScreenVisible(): boolean;
+				rebuildLayout(): void;
+			}): void;
+			isStartScreenVisible(this: {
+				chatContainer?: Container;
+				tabManager: {
+					getActiveTab():
+						| {
+								session: {
+									sessionManager?: { getEntryCount(): number };
+									messages?: unknown[];
+									isStreaming: boolean;
+								};
+						  }
+						| undefined;
+				};
+			}): boolean;
+		};
+		let rebuildCalled = false;
 		const im = {
 			showStartScreen: undefined as boolean | undefined,
 			isStartScreenVisible: () => false,
 			rebuildLayout() {
 				rebuildCalled = true;
 			},
-			syncStartScreen: (InteractiveMode.prototype as any).syncStartScreen,
+			syncStartScreen: imProto.syncStartScreen,
 		};
-		let rebuildCalled = false;
 		im.syncStartScreen();
 		expect(rebuildCalled).toBe(true);
 		expect(im.showStartScreen).toBe(false);
 	});
 
 	it("transitions showStartScreen from true to false when chatContainer receives content from /hotkeys or /changelog", () => {
+		const imProto = InteractiveMode.prototype as unknown as {
+			syncStartScreen(this: {
+				showStartScreen?: boolean;
+				chatContainer?: Container;
+				tabManager: {
+					getActiveTab():
+						| {
+								session: {
+									sessionManager?: { getEntryCount(): number };
+									messages?: unknown[];
+									isStreaming: boolean;
+								};
+						  }
+						| undefined;
+				};
+				isStartScreenVisible(): boolean;
+				rebuildLayout(): void;
+			}): void;
+			isStartScreenVisible(this: {
+				chatContainer?: Container;
+				tabManager: {
+					getActiveTab():
+						| {
+								session: {
+									sessionManager?: { getEntryCount(): number };
+									messages?: unknown[];
+									isStreaming: boolean;
+								};
+						  }
+						| undefined;
+				};
+			}): boolean;
+		};
 		const chatContainer = new Container();
 		let rebuildCalled = false;
 		const im = {
@@ -460,11 +646,11 @@ describe("InteractiveMode.isStartScreenVisible", () => {
 					session: { sessionManager: { getEntryCount: () => 0 }, messages: [], isStreaming: false },
 				}),
 			},
-			isStartScreenVisible: (InteractiveMode.prototype as any).isStartScreenVisible,
+			isStartScreenVisible: imProto.isStartScreenVisible,
 			rebuildLayout() {
 				rebuildCalled = true;
 			},
-			syncStartScreen: (InteractiveMode.prototype as any).syncStartScreen,
+			syncStartScreen: imProto.syncStartScreen,
 		};
 
 		// When chatContainer has no children, isStartScreenVisible is true (no transition)

@@ -45,8 +45,10 @@ export class StartScreen implements Component {
 	private topSpacer = 0;
 	private logoHeight = 0;
 	private logoLeft = 0;
+	private renderedLogoWidth = 0;
 	private editorHeight = 0;
 	private editorLeft = 0;
+	private footerHeight = 0;
 
 	constructor(props: StartScreenProps) {
 		this.props = props;
@@ -100,7 +102,9 @@ export class StartScreen implements Component {
 		const coloredLogo = logo.map((line) => theme.fg("accent", line));
 
 		this.logoHeight = coloredLogo.length;
+		this.renderedLogoWidth = logoWidth(logo);
 		this.editorHeight = editorLines.length;
+		this.footerHeight = footerLines.length;
 		const contentHeight = this.logoHeight + this.editorHeight + footerLines.length;
 		this.topSpacer = Math.max(0, Math.floor((height - contentHeight) / 2));
 		const bottomSpacer = Math.max(0, height - contentHeight - this.topSpacer);
@@ -137,13 +141,16 @@ export class StartScreen implements Component {
 		const editorTop = logoTop + this.logoHeight;
 
 		// Logo click region -> 3D easter egg (same gesture as the header wordmark).
+		// Only trigger on explicit left clicks.
 		if (
 			this.props.onLogoClick &&
+			event.type === "click" &&
+			event.button === "left" &&
 			this.logoHeight > 0 &&
 			event.y >= logoTop &&
 			event.y < logoTop + this.logoHeight &&
 			event.x >= this.logoLeft &&
-			event.x < this.logoLeft + logoWidth(this.props.logoLines)
+			event.x < this.logoLeft + this.renderedLogoWidth
 		) {
 			this.props.onLogoClick(event.x, event.y);
 			return { handled: true };
@@ -156,6 +163,16 @@ export class StartScreen implements Component {
 				x: Math.max(0, event.x - this.editorLeft),
 				y: event.y - editorTop,
 				height: this.editorHeight,
+			});
+		}
+
+		// Forward mouse events in the footer's vertical range to the footer.
+		const footerTop = editorTop + this.editorHeight;
+		if (event.y >= footerTop && event.y < footerTop + this.footerHeight) {
+			return this.props.footer.handleMouse?.({
+				...event,
+				y: event.y - footerTop,
+				height: this.footerHeight,
 			});
 		}
 		return undefined;

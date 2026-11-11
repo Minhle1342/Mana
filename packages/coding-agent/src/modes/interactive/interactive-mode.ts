@@ -1102,7 +1102,12 @@ export class InteractiveMode {
 			logoLines: manaLogoLines(),
 			editor: this.editorContainer,
 			footer: this.footerContainer,
-			getHeight: () => this.ui.terminal.rows,
+			getHeight: () =>
+				Math.max(
+					1,
+					this.ui.terminal.rows -
+						(this.tabBarContainer ? this.tabBarContainer.render(this.ui.terminal.columns).length : 2),
+				),
 			onLogoClick: (column, row) => playManaLogo3d(this.renderer, column, row),
 		});
 
@@ -2722,18 +2727,19 @@ export class InteractiveMode {
 
 	/** Whether the start screen should be shown for the active tab (empty, not streaming, in fullscreen mode). */
 	private isStartScreenVisible(): boolean {
-		if (this.renderer?.mode !== undefined && this.renderer.mode !== "fullscreen") return false;
+		if (this.renderer && this.renderer.mode !== "fullscreen") return false;
 		const slot = this.tabManager?.getActiveTab();
 		if (!slot) return false;
-		if (slot.session.isStreaming) return false;
+		if (slot.session?.isStreaming) return false;
 		if (this.chatContainer && this.chatContainer.children.length > 0) return false;
-		const messages = slot.session.messages;
+		const messages = slot.session?.messages;
 		if (messages) return messages.length === 0;
-		return slot.session.sessionManager.getEntryCount() === 0;
+		return (slot.session?.sessionManager?.getEntryCount() ?? 0) === 0;
 	}
 
 	/** Rebuild the mounted layout when the start screen's visibility changes. */
 	private rebuildLayout(): void {
+		if (!this.renderer) return;
 		const normalComponents: Component[] = [
 			this.tabBarContainer,
 			this.documentContainer,
@@ -5533,12 +5539,14 @@ export class InteractiveMode {
 	showError(errorMessage: string): void {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new ThemedText(() => theme.fg("error", `Error: ${errorMessage}`), this.outputPad, 0));
+		this.syncStartScreen?.();
 		this.ui.requestRender();
 	}
 
 	showWarning(warningMessage: string): void {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new ThemedText(() => theme.fg("warning", `Warning: ${warningMessage}`), 1, 0));
+		this.syncStartScreen?.();
 		this.ui.requestRender();
 	}
 
