@@ -387,6 +387,9 @@ const RADIUS_LOGIN_INTRO = "Radius is a service crafted for Pi by the builders o
 
 const AUTH_TYPE_ORDER = { oauth: 0, api_key: 1 } satisfies Record<AuthSelectorProvider["authType"], number>;
 
+/** Bound startup: a hand-edited tabs.json must not open hundreds of runtimes. */
+const MAX_RESTORED_TABS = 32;
+
 function createFuzzyAutocompleteItems<T>(
 	items: T[],
 	prefix: string,
@@ -492,6 +495,8 @@ export class InteractiveMode {
 	private tabState!: TabStateStore;
 	/** The workspace whose tab layout is saved; the launch cwd, which `/cd` must not move. */
 	private workspaceKey!: string;
+	/** True while reopening saved tabs: rebinds must not render per tab, and nothing is saved yet. */
+	private isRestoringTabs = false;
 	private tabBar?: TabBar;
 	private renderer: TuiMainScreen | TuiAltScreen;
 	private ui: TUI;
@@ -2330,7 +2335,8 @@ export class InteractiveMode {
 			const slot = this.tabManager?.getTab(tabId);
 			if (slot) this.setupTabListeners(slot);
 			if (this.tabManager?.getActiveTab()?.runtime === runtime) {
-				await this.rebindCurrentSession({ renderBeforeBind: true });
+				// While restoring, init() renders once after every tab exists instead of once per tab.
+				await this.rebindCurrentSession({ renderBeforeBind: !this.isRestoringTabs });
 				this.themeController.applyFromSettings();
 			}
 			// `/cd`, `/new`, and `/resume` replace the session behind a tab: its cwd and file moved.
@@ -2404,7 +2410,7 @@ export class InteractiveMode {
 		const switched = await this.tabManager.switchTab(id);
 		if (!switched) return;
 		if (previous) this.detachTabRetryUi(previous.id);
-		await this.rebindCurrentSession({ renderBeforeBind: true });
+		await this.rebindCurrentSession({ renderBeforeBind: !this.isRestoringTabs });
 		const next = this.tabManager.getActiveTab();
 		if (next) this.attachTabRetryUi(next);
 		this.saveTabState();
@@ -2472,6 +2478,10 @@ export class InteractiveMode {
 
 	/** Persist the tab layout for this workspace; a failed write never aborts the user's action. */
 	private saveTabState(): void {
+		// Only a plain start owns the saved layout: an explicit session selection starts nothing to replace,
+		// an in-memory run has no files, and a restore writes once it has every tab.
+		if (this.options.restoreTabs !== true || this.isRestoringTabs) return;
+		if (!this.tabManager.getAllTabs().every((tab) => tab.session.sessionManager.isPersisted())) return;
 		try {
 			this.tabState.save(this.workspaceKey, this.tabManager.snapshot());
 		} catch (error: unknown) {
@@ -2487,49 +2497,77 @@ export class InteractiveMode {
 		if (this.options.restoreTabs !== true) return;
 		const saved = this.tabState.load(this.workspaceKey);
 		if (!saved || saved.tabs.length === 0) return;
-		const [first, ...rest] = saved.tabs;
-		if (first) await this.resumeFirstTabSession(first);
-		for (const tab of rest) {
-			try {
-				if (!fs.existsSync(tab.cwd) || !fs.statSync(tab.cwd).isDirectory()) {
-					this.showWarning(`Skipped restored tab "${tab.name}": ${tab.cwd} is gone`);
-					continue;
-				}
-				const slot = await this.tabManager.addTab({
-					cwd: tab.cwd,
-					name: tab.name,
-					sessionFile: tab.sessionFile ?? undefined,
-				});
-				this.setupTabListeners(slot);
-			} catch (error: unknown) {
-				this.showWarning(
-					`Could not restore tab "${tab.name}": ${error instanceof Error ? error.message : String(error)}`,
-				);
+		// Skip the per-tab renders and saves: init() renders once, and a layout missing a skipped tab must not be saved.
+		this.isRestoringTabs = true;
+		let complete = true;
+		try {
+			const [first, ...rest] = saved.tabs;
+			const restored: (TabSlot | undefined)[] = [];
+			if (first) {
+				restored[0] = this.tabManager.getActiveTab();
+				if (!(await this.resumeFirstTabSession(first))) complete = false;
+				// The entry point names the first tab before the saved name is known.
+				if (restored[0]) this.tabManager.renameTab(restored[0].id, first.name, first.customName);
 			}
+			const restorable = rest.slice(0, Math.max(0, MAX_RESTORED_TABS - 1));
+			if (rest.length > restorable.length) {
+				complete = false;
+				this.showWarning(`Restored the first ${MAX_RESTORED_TABS} of ${saved.tabs.length} saved tabs`);
+			}
+			for (const [offset, tab] of restorable.entries()) {
+				const index = offset + 1;
+				try {
+					if (!fs.existsSync(tab.cwd) || !fs.statSync(tab.cwd).isDirectory()) {
+						complete = false;
+						this.showWarning(`Skipped restored tab "${tab.name}": ${tab.cwd} is gone`);
+						continue;
+					}
+					const slot = await this.tabManager.addTab({
+						cwd: tab.cwd,
+						name: tab.name,
+						sessionFile: tab.sessionFile ?? undefined,
+					});
+					this.setupTabListeners(slot);
+					restored[index] = slot;
+				} catch (error: unknown) {
+					complete = false;
+					this.showWarning(
+						`Could not restore tab "${tab.name}": ${error instanceof Error ? error.message : String(error)}`,
+					);
+				}
+			}
+			// Index into the slots that actually opened: a skipped tab must not shift the active one.
+			const active = restored[saved.activeIndex];
+			if (active) await this.switchTab(active.id);
+		} finally {
+			this.isRestoringTabs = false;
 		}
-		const active = this.tabManager.getAllTabs()[saved.activeIndex];
-		if (active) await this.switchTab(active.id);
-		this.saveTabState();
+		// Saving a partial layout would drop every tab that failed to reopen.
+		if (complete) this.saveTabState();
 		this.refreshTabBar();
 		this.ui.requestRender();
 	}
 
 	/**
 	 * Resume the saved session in the tab the entry point already created, so a restored layout keeps its
-	 * first conversation too. A session that is gone or cannot open leaves the new session in place.
+	 * first conversation too. A session that is gone or cannot open leaves the new session in place;
+	 * it reports false only when an existing session could not be opened, so its path survives.
 	 */
-	private async resumeFirstTabSession(tab: PersistedTab): Promise<void> {
+	private async resumeFirstTabSession(tab: PersistedTab): Promise<boolean> {
 		const runtime = this.tabManager.getActiveTab()?.runtime;
-		if (!runtime || tab.sessionFile === null || !fs.existsSync(tab.sessionFile)) return;
-		if (runtime.session.sessionManager.getSessionFile() === tab.sessionFile) return;
+		if (!runtime || tab.sessionFile === null || !fs.existsSync(tab.sessionFile)) return true;
+		if (runtime.session.sessionManager.getSessionFile() === tab.sessionFile) return true;
 		try {
 			await runtime.switchSession(tab.sessionFile, {
+				cwdOverride: fs.existsSync(tab.cwd) ? tab.cwd : undefined,
 				projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
 			});
+			return true;
 		} catch (error: unknown) {
 			this.showWarning(
 				`Could not resume tab "${tab.name}": ${error instanceof Error ? error.message : String(error)}`,
 			);
+			return false;
 		}
 	}
 

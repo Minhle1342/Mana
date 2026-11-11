@@ -69,13 +69,26 @@ describe("TabStateStore", () => {
 		expect(store.load("/work/one")?.tabs).toEqual(layout.tabs);
 	});
 
+	it("leaves a file from an unknown version untouched", async () => {
+		const { store, agentDir } = await makeStore();
+		const path = join(agentDir, "tabs.json");
+		const future = JSON.stringify({ version: 2, workspaces: { "/work/one": layout } });
+		await writeFile(path, future, "utf-8");
+
+		store.save("/work/two", layout);
+
+		expect(await readFile(path, "utf-8")).toBe(future);
+		expect(store.load("/work/one")).toBeUndefined();
+	});
+
 	it("keys one record per workspace across separators and casing", async () => {
 		const { store, agentDir } = await makeStore();
 		store.save("/work/one", layout);
 		store.save("/work/one/", { ...layout, activeIndex: 0 });
 		const file = JSON.parse(await readFile(join(agentDir, "tabs.json"), "utf-8"));
 		expect(Object.keys(file.workspaces)).toHaveLength(1);
-		expect(store.load("/work/ONE")?.activeIndex).toBe(0);
+		// Case folds only where the platform does; elsewhere a differently-cased path is another workspace.
+		expect(store.load("/work/ONE")?.activeIndex).toBe(process.platform === "win32" ? 0 : undefined);
 	});
 
 	it("prunes to the 32 most recently saved workspaces", async () => {

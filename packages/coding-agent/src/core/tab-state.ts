@@ -49,8 +49,10 @@ export class TabStateStore {
 
 	/** The saved layout for `cwd`, or undefined when that workspace was never saved. */
 	load(cwd: string): PersistedWorkspace | undefined {
+		const file = this.read();
+		if (!file) return undefined;
 		const key = canonicalizePath(resolvePath(cwd));
-		for (const [saved, workspace] of Object.entries(this.read().workspaces)) {
+		for (const [saved, workspace] of Object.entries(file.workspaces)) {
 			if (pathsEqual(saved, key)) return workspace;
 		}
 		return undefined;
@@ -61,6 +63,8 @@ export class TabStateStore {
 		const key = canonicalizePath(resolvePath(cwd));
 		withLock(this.tabsPath, () => {
 			const file = this.read();
+			// A file from a newer pi version is left untouched: overwriting it would drop tabs this version cannot see.
+			if (!file) return;
 			for (const saved of Object.keys(file.workspaces)) {
 				if (pathsEqual(saved, key)) delete file.workspaces[saved];
 			}
@@ -70,7 +74,7 @@ export class TabStateStore {
 		});
 	}
 
-	private read(): TabStateFile {
+	private read(): TabStateFile | undefined {
 		if (!existsSync(this.tabsPath)) return emptyState();
 		try {
 			return parseTabState(JSON.parse(readFileSync(this.tabsPath, "utf-8")));
@@ -99,12 +103,13 @@ function emptyState(): TabStateFile {
 
 /**
  * Trust boundary: tabs.json is user-editable and written by other pi versions.
- * A version, field, or value this version does not know means "no saved tabs".
+ * A file from another version is unreadable here (undefined) so it is never rewritten;
+ * a malformed entry within this version's format means "no saved tabs".
  */
-function parseTabState(value: unknown): TabStateFile {
-	if (typeof value !== "object" || value === null) return emptyState();
+function parseTabState(value: unknown): TabStateFile | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
 	const file = value as { version?: unknown; workspaces?: unknown };
-	if (file.version !== TAB_STATE_VERSION) return emptyState();
+	if (file.version !== TAB_STATE_VERSION) return undefined;
 	if (typeof file.workspaces !== "object" || file.workspaces === null) return emptyState();
 	const workspaces: Record<string, PersistedWorkspace> = {};
 	for (const [key, entry] of Object.entries(file.workspaces)) {

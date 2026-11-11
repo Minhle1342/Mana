@@ -31,7 +31,7 @@ Other modes exit with an error.
 
 Use `/name` or `--name` to assign a recognizable session name. Run `/session` to verify the current session file, ID, message count, token usage, and cost.
 
-Interactive mode also remembers the tabs open in a workspace: it saves their order, names, working directories, and session files to `~/.pi/agent/tabs.json` and reopens them on the next start. Starting with `--continue`, `--resume`, `--session`, `--fork`, `--session-id`, or `--no-session` selects a session explicitly, so pi opens that single tab instead of the saved layout.
+Interactive mode also remembers the tabs open in a workspace: it saves their order, names, working directories, and session files to `~/.pi/agent/tabs.json` and reopens them on the next start. Starting with `--continue`, `--resume`, `--session`, `--fork`, `--session-id`, or `--no-session` selects a session explicitly: pi opens that single tab and leaves the saved layout unchanged. An ephemeral `--no-session` run saves no tab state.
 
 The session picker lets you search, rename, and delete sessions. It can also show paths, change sorting, and limit results to named sessions. See [Keybindings](keybindings.md#sessions) for its shortcuts.
 

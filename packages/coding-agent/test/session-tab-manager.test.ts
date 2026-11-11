@@ -2,12 +2,14 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
 import type { AgentSessionRuntime, CreateAgentSessionRuntimeResult } from "../src/core/agent-session-runtime.ts";
 import { SessionTabManager } from "../src/core/session-tab-manager.ts";
 
 const cwd = process.cwd();
+
+afterEach(() => vi.unstubAllEnvs());
 
 function mockSession(modelName = "model-1", sessionFile?: string): AgentSession {
 	let currentModel = { id: modelName, provider: "test" } as unknown as Model<any>;

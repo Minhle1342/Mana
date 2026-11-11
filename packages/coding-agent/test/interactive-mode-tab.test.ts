@@ -19,7 +19,8 @@ type InteractiveModeTabContext = {
 		switchTab: (id: string) => Promise<boolean>;
 		addTab: (options: { cwd: string; name?: string }) => Promise<TabSlot>;
 		removeTab: (id: string) => Promise<boolean>;
-		renameTab: (id: string, name: string) => boolean;
+		renameTab: (id: string, name: string, isCustom?: boolean) => boolean;
+		snapshot: () => { tabs: unknown[]; activeIndex: number };
 	};
 	activeTabRuntime: {
 		newSession: () => Promise<{ cancelled: boolean }>;
@@ -68,8 +69,9 @@ type InteractiveModeTabContext = {
 	options: { restoreTabs?: boolean };
 	saveTabState: () => void;
 	restoreTabState: () => Promise<void>;
-	resumeFirstTabSession: (tab: PersistedWorkspaceFixture["tabs"][number]) => Promise<void>;
+	resumeFirstTabSession: (tab: PersistedWorkspaceFixture["tabs"][number]) => Promise<boolean>;
 	showWarning: (message: string) => void;
+	isRestoringTabs: boolean;
 };
 
 type PersistedWorkspaceFixture = {
@@ -89,7 +91,7 @@ type TabRetryUiStateFixture = {
 
 const prototype = InteractiveMode.prototype as unknown as InteractiveModeTabContext;
 
-function createMockTab(id: string, name: string, cwd = "/work/dir", isStreaming = false): TabSlot {
+function createMockTab(id: string, name: string, cwd = "/work/dir", isStreaming = false, isPersisted = true): TabSlot {
 	return {
 		id,
 		name,
@@ -97,6 +99,7 @@ function createMockTab(id: string, name: string, cwd = "/work/dir", isStreaming 
 		session: {
 			isStreaming,
 			prompt: vi.fn(async () => {}),
+			sessionManager: { isPersisted: () => isPersisted, getSessionFile: () => null },
 		} as unknown as any,
 		runtime: {
 			cwd,
@@ -840,10 +843,15 @@ describe("InteractiveMode tab state persistence", () => {
 		restoreTabs?: boolean;
 		cwds: string[];
 		addTabError?: string;
+		persisted?: boolean;
 	}) {
-		const tabs = options.cwds.map((cwd, index) => createMockTab(`tab-${index + 1}`, `Tab ${index + 1}`, cwd));
+		const tabs = options.cwds.map((cwd, index) =>
+			createMockTab(`tab-${index + 1}`, `Tab ${index + 1}`, cwd, false, options.persisted ?? true),
+		);
 		const load = vi.fn(() => options.saved);
 		const save = vi.fn();
+		const snapshot = { tabs: [], activeIndex: 0 };
+		const renameTab = vi.fn(() => true);
 		let failed = false;
 		const addTab = vi.fn(async (request: { cwd: string; name?: string; sessionFile?: string }) => {
 			if (options.addTabError !== undefined && !failed) {
@@ -861,14 +869,21 @@ describe("InteractiveMode tab state persistence", () => {
 			options: { restoreTabs: options.restoreTabs },
 			tabState: { load, save },
 			workspaceKey: "/work/a",
-			tabManager: { getAllTabs: () => tabs, getActiveTab: () => undefined, addTab },
+			tabManager: {
+				getAllTabs: () => tabs,
+				getActiveTab: () => tabs[0],
+				addTab,
+				renameTab,
+				snapshot: () => snapshot,
+			},
 			switchTab,
 			showWarning,
 			setupTabListeners,
 			refreshTabBar: vi.fn(),
 			ui: { requestRender: vi.fn() },
+			isRestoringTabs: false,
 		}) as InteractiveModeTabContext;
-		return { context, load, save, addTab, switchTab, showWarning, tabs };
+		return { context, load, save, addTab, switchTab, showWarning, renameTab, tabs };
 	}
 
 	it("does not read saved tabs unless the entry point opted in", async () => {
@@ -882,7 +897,7 @@ describe("InteractiveMode tab state persistence", () => {
 		try {
 			await mkdir(join(root, "b"), { recursive: true });
 			await mkdir(join(root, "c"), { recursive: true });
-			const { context, addTab, switchTab, tabs } = createPersistenceContext({
+			const { context, addTab, switchTab, save, tabs } = createPersistenceContext({
 				saved: savedWorkspace({
 					tabs: [
 						{ name: "Tab 1", customName: false, cwd: root, sessionFile: null },
@@ -909,13 +924,55 @@ describe("InteractiveMode tab state persistence", () => {
 				sessionFile: undefined,
 			});
 			expect(switchTab).toHaveBeenCalledWith(tabs[2].id);
+			expect(save).toHaveBeenCalledTimes(1);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("renames the first tab to the saved name", async () => {
+		const { context, renameTab, tabs } = createPersistenceContext({
+			saved: savedWorkspace({
+				tabs: [{ name: "Work", customName: true, cwd: "/work/a", sessionFile: null }],
+				activeIndex: 0,
+			}),
+			restoreTabs: true,
+			cwds: ["/work/a"],
+		});
+
+		await prototype.restoreTabState.call(context);
+
+		expect(renameTab).toHaveBeenCalledWith(tabs[0].id, "Work", true);
+	});
+
+	it("activates the saved tab even when an earlier one was skipped", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-restore-skip-"));
+		try {
+			await mkdir(join(root, "notes"), { recursive: true });
+			const { context, switchTab, tabs } = createPersistenceContext({
+				saved: savedWorkspace({
+					tabs: [
+						{ name: "Tab 1", customName: false, cwd: root, sessionFile: null },
+						{ name: "Gone", customName: true, cwd: join(tmpdir(), "pi-tab-missing-skip"), sessionFile: null },
+						{ name: "Notes", customName: true, cwd: join(root, "notes"), sessionFile: null },
+					],
+					activeIndex: 2,
+				}),
+				restoreTabs: true,
+				cwds: [root],
+			});
+
+			await prototype.restoreTabState.call(context);
+
+			expect(tabs).toHaveLength(2);
+			expect(switchTab).toHaveBeenCalledWith(tabs[1].id);
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
 	});
 
 	it("skips a saved tab whose cwd is gone and keeps the rest", async () => {
-		const { context, addTab, showWarning } = createPersistenceContext({
+		const { context, addTab, save, showWarning } = createPersistenceContext({
 			saved: savedWorkspace({
 				tabs: [
 					{ name: "Tab 1", customName: false, cwd: "/work/a", sessionFile: null },
@@ -928,6 +985,7 @@ describe("InteractiveMode tab state persistence", () => {
 		await prototype.restoreTabState.call(context);
 		expect(addTab).not.toHaveBeenCalled();
 		expect(showWarning).toHaveBeenCalledWith(expect.stringContaining("Gone"));
+		expect(save).not.toHaveBeenCalled();
 	});
 
 	it("keeps restoring when one saved tab fails to open", async () => {
@@ -935,7 +993,7 @@ describe("InteractiveMode tab state persistence", () => {
 		try {
 			await mkdir(join(root, "b"), { recursive: true });
 			await mkdir(join(root, "c"), { recursive: true });
-			const { context, addTab, showWarning, tabs } = createPersistenceContext({
+			const { context, addTab, showWarning, save, tabs } = createPersistenceContext({
 				saved: savedWorkspace({
 					tabs: [
 						{ name: "Tab 1", customName: false, cwd: root, sessionFile: null },
@@ -953,27 +1011,42 @@ describe("InteractiveMode tab state persistence", () => {
 			expect(addTab).toHaveBeenCalledTimes(2);
 			expect(showWarning).toHaveBeenCalledWith(expect.stringContaining("boom"));
 			expect(tabs).toHaveLength(2);
+			expect(save).not.toHaveBeenCalled();
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
 	});
 
 	it("saves the snapshot under the workspace key", () => {
-		const save = vi.fn();
-		const snapshot = { tabs: [], activeIndex: 0 };
-		const context = Object.assign(Object.create(InteractiveMode.prototype), {
-			tabState: { load: () => undefined, save },
-			workspaceKey: "/work/a",
-			tabManager: { snapshot: () => snapshot },
-			showWarning: vi.fn(),
-		}) as InteractiveModeTabContext;
+		const { context, save } = createPersistenceContext({ cwds: ["/work/a"], restoreTabs: true });
 		prototype.saveTabState.call(context);
-		expect(save).toHaveBeenCalledWith("/work/a", snapshot);
+		expect(save).toHaveBeenCalledWith("/work/a", { tabs: [], activeIndex: 0 });
+	});
+
+	it("does not save when the entry point did not opt in", () => {
+		const { context, save } = createPersistenceContext({ cwds: ["/work/a"] });
+		prototype.saveTabState.call(context);
+		expect(save).not.toHaveBeenCalled();
+	});
+
+	it("does not save a non-persisted tab layout", () => {
+		const { context, save } = createPersistenceContext({ cwds: ["/work/a"], restoreTabs: true, persisted: false });
+		prototype.saveTabState.call(context);
+		expect(save).not.toHaveBeenCalled();
+	});
+
+	it("does not save while a restore is still running", () => {
+		const { context, save } = createPersistenceContext({ cwds: ["/work/a"], restoreTabs: true });
+		context.isRestoringTabs = true;
+		prototype.saveTabState.call(context);
+		expect(save).not.toHaveBeenCalled();
 	});
 
 	it("warns instead of throwing when the layout cannot be saved", () => {
 		const showWarning = vi.fn();
+		const tab = createMockTab("tab-1", "Tab 1", "/work/a");
 		const context = Object.assign(Object.create(InteractiveMode.prototype), {
+			options: { restoreTabs: true },
 			tabState: {
 				load: () => undefined,
 				save: () => {
@@ -981,11 +1054,36 @@ describe("InteractiveMode tab state persistence", () => {
 				},
 			},
 			workspaceKey: "/work/a",
-			tabManager: { snapshot: () => ({ tabs: [], activeIndex: 0 }) },
+			tabManager: { getAllTabs: () => [tab], snapshot: () => ({ tabs: [], activeIndex: 0 }) },
 			showWarning,
 		}) as InteractiveModeTabContext;
 		expect(() => prototype.saveTabState.call(context)).not.toThrow();
 		expect(showWarning).toHaveBeenCalledWith(expect.stringContaining("disk full"));
+	});
+
+	it("rebinds without rendering while a restore is in progress", async () => {
+		const rebindCurrentSession = vi.fn(async () => {});
+		const context = Object.assign(Object.create(InteractiveMode.prototype), {
+			isRestoringTabs: true,
+			tabManager: {
+				getActiveTab: () => createMockTab("tab-2", "Tab 2"),
+				switchTab: async () => true,
+			},
+			rebindCurrentSession,
+			detachTabRetryUi: vi.fn(),
+			attachTabRetryUi: vi.fn(),
+			saveTabState: vi.fn(),
+			refreshTabBar: vi.fn(),
+			ui: { requestRender: vi.fn() },
+		}) as unknown as InteractiveModeTabContext;
+
+		await prototype.switchTab.call(context, "tab-2");
+		expect(rebindCurrentSession).toHaveBeenCalledWith({ renderBeforeBind: false });
+
+		// Outside a restore the same switch renders before binding, as before.
+		context.isRestoringTabs = false;
+		await prototype.switchTab.call(context, "tab-2");
+		expect(rebindCurrentSession).toHaveBeenLastCalledWith({ renderBeforeBind: true });
 	});
 });
 
@@ -1011,14 +1109,15 @@ describe("InteractiveMode first tab restore", () => {
 			}) as unknown as InteractiveModeTabContext;
 
 			await writeFile(sessionFile, "", "utf-8");
-			await prototype.resumeFirstTabSession.call(context, {
+			const resumed = await prototype.resumeFirstTabSession.call(context, {
 				name: "Tab 1",
 				customName: false,
 				cwd: root,
 				sessionFile,
 			});
 
-			expect(switchSession).toHaveBeenCalledWith(sessionFile, expect.objectContaining({}));
+			expect(resumed).toBe(true);
+			expect(switchSession).toHaveBeenCalledWith(sessionFile, expect.objectContaining({ cwdOverride: root }));
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
@@ -1045,13 +1144,14 @@ describe("InteractiveMode first tab restore", () => {
 				showWarning,
 			}) as unknown as InteractiveModeTabContext;
 
-			await prototype.resumeFirstTabSession.call(context, {
+			const resumed = await prototype.resumeFirstTabSession.call(context, {
 				name: "Tab 1",
 				customName: false,
 				cwd: root,
 				sessionFile,
 			});
 
+			expect(resumed).toBe(false);
 			expect(showWarning).toHaveBeenCalledWith(expect.stringContaining("locked"));
 		} finally {
 			await rm(root, { recursive: true, force: true });
