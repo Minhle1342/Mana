@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Google Generative AI and Google Vertex streams throwing an unhandled `Incomplete JSON segment at the end` error when the server stream ends with trailing whitespace or keep-alive comments, or drops prematurely. The adapters now recover already-received text and completed tool calls, and retry dropped streams that fail before emitting output.
+
 ## [1.5.2] - 2026-11-10
 
 ### Fixed

@@ -12,6 +12,7 @@ import {
 } from "@google/genai";
 import { clampThinkingLevel } from "../models.ts";
 import type {
+	AssistantMessage,
 	ImageContent,
 	Model,
 	StopReason,
@@ -571,4 +572,39 @@ export function retryGoogleRequest<T>(
 			signal: options?.signal,
 		},
 	);
+}
+
+/**
+ * Checks whether an error is Google SDK's stream termination error
+ * ("Incomplete JSON segment at the end").
+ */
+export function isIncompleteJsonError(error: unknown): boolean {
+	return error instanceof Error && error.message.includes("Incomplete JSON segment at the end");
+}
+
+/**
+ * Determines whether a stream error caused by Google SDK's incomplete JSON segment
+ * can be safely recovered from because valid, usable output content (tool call or text)
+ * was already completely received and emitted before the stream boundary failure.
+ */
+export function canRecoverFromIncompleteJsonError(error: unknown, output: AssistantMessage): boolean {
+	if (!isIncompleteJsonError(error)) {
+		return false;
+	}
+	const hasToolCalls = output.content.some((b) => b.type === "toolCall");
+	const hasText = output.content.some((b) => b.type === "text" && b.text.trim().length > 0);
+	return hasToolCalls || hasText;
+}
+
+/**
+ * Resolves the appropriate StopReason when recovering from an incomplete JSON segment error.
+ */
+export function resolveIncompleteJsonStopReason(output: AssistantMessage): StopReason {
+	if (output.content.some((b) => b.type === "toolCall")) {
+		return "toolUse";
+	}
+	if (output.rawStopReason) {
+		return mapStopReasonString(output.rawStopReason);
+	}
+	return "stop";
 }
