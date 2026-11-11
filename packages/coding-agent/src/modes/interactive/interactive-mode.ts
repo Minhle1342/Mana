@@ -156,7 +156,7 @@ import { CustomEntryComponent } from "./components/custom-entry.ts";
 import { CustomMessageComponent } from "./components/custom-message.ts";
 import { DynamicBorder } from "./components/dynamic-border.ts";
 import { EarendilAnnouncementComponent } from "./components/earendil-announcement.ts";
-import { playArmin3d, playPiLogo3d } from "./components/easter-egg-3d.lazy.ts";
+import { playArmin3d, playManaLogo3d } from "./components/easter-egg-3d.lazy.ts";
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
@@ -172,12 +172,13 @@ import {
 	formatAuthSelectorProviderType,
 	OAuthSelectorComponent,
 } from "./components/oauth-selector.ts";
-import { piLogoLines, piWordmark, supportsPiLogo } from "./components/pi-logo.ts";
+import { manaLogoLines, manaWordmark } from "./components/pi-logo.ts";
 import { createLoginMenuSelector } from "./components/radius-login-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
+import { StartScreen } from "./components/start-screen.ts";
 import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
@@ -383,7 +384,7 @@ type LoginProviderCompletionOption = {
 	subscription?: boolean;
 };
 
-const RADIUS_LOGIN_INTRO = "Radius is a service crafted for Pi by the builders of Pi, Earendil Works";
+const RADIUS_LOGIN_INTRO = "Radius is a service crafted for Mana by the builders of Mana, Earendil Works";
 
 const AUTH_TYPE_ORDER = { oauth: 0, api_key: 1 } satisfies Record<AuthSelectorProvider["authType"], number>;
 
@@ -643,6 +644,12 @@ export class InteractiveMode {
 
 	// Custom header from extension (undefined = use built-in header)
 	private customHeader: (Component & { dispose?(): void }) | undefined = undefined;
+
+	// Start screen shown when the active tab's session is empty. The editor is
+	// reparented into this component while active, out of the dock below.
+	private startScreen!: StartScreen;
+	private startScreenLayoutRoot: Component | undefined;
+	private showStartScreen: boolean | undefined = undefined;
 
 	private options: InteractiveModeOptions;
 	private readonly onRightClickPaste = (): void => {
@@ -1088,16 +1095,20 @@ export class InteractiveMode {
 		});
 		this.transcriptScrollView = viewport.transcript;
 		this.fullscreenLayoutRoot = viewport.root;
-		this.mountInteractiveTui(this.renderer, [
-			this.tabBarContainer,
-			this.documentContainer,
-			this.pendingMessagesContainer,
-			this.statusContainer,
-			this.widgetContainerAbove,
-			this.editorContainer,
-			this.widgetContainerBelow,
-			this.footerContainer,
-		]);
+
+		// Start screen for empty sessions: the editor's output is rendered here
+		// (the editor stays mounted in the dock).
+		this.startScreen = new StartScreen({
+			logoLines: manaLogoLines(),
+			editor: this.editorContainer,
+			footer: this.footerContainer,
+			getHeight: () => this.ui.terminal.rows,
+			onLogoClick: (column, row) => playManaLogo3d(this.renderer, column, row),
+		});
+
+		// Mount the initial layout: start screen when the active session is empty,
+		// otherwise the normal tab bar + transcript + dock layout.
+		this.syncStartScreen();
 		// Accept text while startup completes, but only enable interrupt, exit, and submission feedback.
 		this.defaultEditor.onAction("app.clear", () => this.handleCtrlC());
 		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
@@ -1118,15 +1129,9 @@ export class InteractiveMode {
 		// Add header with keybindings from config (unless silenced)
 		if (this.shouldShowStartupHeader()) {
 			const showDetails = this.shouldShowStartupDetails();
-			// Built on demand so the header follows theme changes. The logo's first line carries the version,
-			// its second line the first line of key hints. Terminals that cannot render the logo get a
-			// "Pi vX" line instead, with the key hints below it.
-			const showLogo = supportsPiLogo();
-			const withLogo = (hints: string) => {
-				if (!showLogo) return `${piWordmark()} ${theme.fg("dim", `v${this.version}`)}\n${hints}`;
-				const [top, bottom] = piLogoLines();
-				return `${top} ${theme.fg("dim", `v${this.version}`)}\n${bottom} ${hints}`;
-			};
+			// Built on demand so the header follows theme changes. The wordmark's line carries the version,
+			// the next line the first line of key hints. The block logo is reserved for the start screen.
+			const withLogo = (hints: string) => `${manaWordmark()} ${theme.fg("dim", `v${this.version}`)}\n${hints}`;
 
 			// Build startup instructions using keybinding hint helpers
 			const hint = (keybinding: AppKeybinding, description: string) => keyHint(keybinding, description);
@@ -1170,7 +1175,10 @@ export class InteractiveMode {
 					`Press ${keyText("app.tools.expand")} to show full startup help${showDetails ? " and loaded resources" : ""}.`,
 				);
 			const onboarding = () =>
-				theme.fg("dim", `Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`);
+				theme.fg(
+					"dim",
+					`Mana can explain its own features and look up its docs. Ask it how to use or extend Mana.`,
+				);
 			const header = new BuiltInHeader(
 				() => `${withLogo(compactInstructions())}\n${compactOnboarding()}\n\n${onboarding()}`,
 				() => `${withLogo(expandedInstructions())}\n\n${onboarding()}`,
@@ -1178,7 +1186,7 @@ export class InteractiveMode {
 				1,
 				0,
 			);
-			if (showLogo) header.onLogoClick = (column, row) => playPiLogo3d(this.renderer, column, row);
+			header.onLogoClick = (column, row) => playManaLogo3d(this.renderer, column, row);
 			this.builtInHeader = header;
 
 			// Setup UI layout
@@ -1438,7 +1446,7 @@ export class InteractiveMode {
 		}
 
 		if (extendedKeysFormat === "xterm") {
-			return "tmux extended-keys-format is xterm. Pi works best with csi-u. Add `set -g extended-keys-format csi-u` to ~/.tmux.conf and restart tmux.";
+			return "tmux extended-keys-format is xterm. Mana works best with csi-u. Add `set -g extended-keys-format csi-u` to ~/.tmux.conf and restart tmux.";
 		}
 
 		return undefined;
@@ -2318,6 +2326,7 @@ export class InteractiveMode {
 		await this.updateAvailableProviderCount();
 		this.updateEditorBorderColor();
 		this.updateTerminalTitle();
+		this.syncStartScreen();
 	}
 
 	private configureTabRuntime(runtime: AgentSessionRuntime, tabId: string): void {
@@ -2603,6 +2612,7 @@ export class InteractiveMode {
 				new ThemedText(() => `${theme.fg("accent", "Tabs:")}\n${lines.join("\n")}`, this.outputPad, 0),
 			);
 			this.chatContainer.addChild(new Spacer(1));
+			this.syncStartScreen?.();
 			this.ui.requestRender();
 			return;
 		}
@@ -2707,6 +2717,65 @@ export class InteractiveMode {
 			requestRender: () => this.ui.requestRender(),
 			addInputListener: (listener) => this.ui.addInputListener(listener),
 		});
+		this.syncStartScreen();
+	}
+
+	/** Whether the start screen should be shown for the active tab (empty, not streaming, in fullscreen mode). */
+	private isStartScreenVisible(): boolean {
+		if (this.renderer?.mode !== undefined && this.renderer.mode !== "fullscreen") return false;
+		const slot = this.tabManager?.getActiveTab();
+		if (!slot) return false;
+		if (slot.session.isStreaming) return false;
+		if (this.chatContainer && this.chatContainer.children.length > 0) return false;
+		const messages = slot.session.messages;
+		if (messages) return messages.length === 0;
+		return slot.session.sessionManager.getEntryCount() === 0;
+	}
+
+	/** Rebuild the mounted layout when the start screen's visibility changes. */
+	private rebuildLayout(): void {
+		const normalComponents: Component[] = [
+			this.tabBarContainer,
+			this.documentContainer,
+			this.pendingMessagesContainer,
+			this.statusContainer,
+			this.widgetContainerAbove,
+			this.editorContainer,
+			this.widgetContainerBelow,
+			this.footerContainer,
+		];
+		if (this.renderer.mode === "fullscreen") {
+			// Always keep the normal component tree mounted so it can be transferred when switching
+			// TUI modes; only the layout root changes based on start screen visibility.
+			this.renderer.clear();
+			this.mountInteractiveTui(this.renderer, normalComponents);
+			const renderer = this.renderer;
+			if (!TuiLayouts.isViewportTUI(renderer)) return;
+			if (this.showStartScreen) {
+				if (!this.startScreenLayoutRoot) {
+					this.startScreenLayoutRoot = new TuiLayouts.VStack([
+						{ component: this.tabBarContainer, basis: "auto", grow: 0, shrink: 0, minSize: 1 },
+						{ component: this.startScreen, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+					]);
+				}
+				renderer.setLayoutRoot(this.startScreenLayoutRoot);
+			} else {
+				renderer.setLayoutRoot(this.fullscreenLayoutRoot);
+			}
+		} else {
+			this.renderer.clear();
+			this.mountInteractiveTui(this.renderer, normalComponents);
+		}
+		this.renderer.invalidate();
+		this.renderer.requestRender();
+	}
+
+	/** Sync start screen visibility with the active tab's session state and remount the layout. */
+	private syncStartScreen(): void {
+		const active = this.isStartScreenVisible();
+		if (active === this.showStartScreen) return;
+		this.showStartScreen = active;
+		this.rebuildLayout();
 	}
 
 	private async handleFatalRuntimeError(prefix: string, error: unknown): Promise<never> {
@@ -3576,6 +3645,12 @@ export class InteractiveMode {
 			this.defaultEditor.setText(currentText);
 			this.editor = this.defaultEditor;
 		}
+		if (this.startScreen) {
+			this.startScreen.setProps({
+				...this.startScreen.getProps(),
+				editor: this.editorContainer,
+			});
+		}
 
 		if (!dialogOpen) this.editorContainer.addChild(this.editor as Component);
 		if (this.activeStatusIndicator) {
@@ -3917,21 +3992,25 @@ export class InteractiveMode {
 			if (text === "/name" || text.startsWith("/name ")) {
 				this.handleNameCommand(text);
 				this.editor.setText("");
+				this.syncStartScreen?.();
 				return;
 			}
 			if (text === "/session") {
 				this.handleSessionCommand();
 				this.editor.setText("");
+				this.syncStartScreen?.();
 				return;
 			}
 			if (text === "/changelog") {
 				this.handleChangelogCommand();
 				this.editor.setText("");
+				this.syncStartScreen?.();
 				return;
 			}
 			if (text === "/hotkeys") {
 				this.handleHotkeysCommand();
 				this.editor.setText("");
+				this.syncStartScreen?.();
 				return;
 			}
 			if (text === "/fork") {
@@ -4049,11 +4128,13 @@ export class InteractiveMode {
 			if (text === "/tab" || text.startsWith("/tab ")) {
 				this.editor.setText("");
 				await this.handleTabCommand(text);
+				this.syncStartScreen?.();
 				return;
 			}
 			if (text === "/new") {
 				this.editor.setText("");
 				await this.handleClearCommand();
+				this.syncStartScreen?.();
 				return;
 			}
 			if (text === "/compact" || text.startsWith("/compact ")) {
@@ -4070,16 +4151,19 @@ export class InteractiveMode {
 			if (text === "/debug") {
 				this.handleDebugCommand();
 				this.editor.setText("");
+				this.syncStartScreen?.();
 				return;
 			}
 			if (text === "/arminsayshi") {
 				this.handleArminSaysHi();
 				this.editor.setText("");
+				this.syncStartScreen?.();
 				return;
 			}
 			if (text === "/dementedelves") {
 				this.handleDementedDelves();
 				this.editor.setText("");
+				this.syncStartScreen?.();
 				return;
 			}
 			if (text === "/resume") {
@@ -4107,6 +4191,7 @@ export class InteractiveMode {
 					await this.handleBashCommand(command, isExcluded);
 					this.isBashMode = false;
 					this.updateEditorBorderColor();
+					this.syncStartScreen?.();
 					return;
 				}
 			}
@@ -4144,6 +4229,7 @@ export class InteractiveMode {
 				this.pendingUserInputs.push(text);
 			}
 			this.editor.addToHistory?.(text);
+			this.syncStartScreen?.();
 		};
 	}
 
@@ -4161,6 +4247,7 @@ export class InteractiveMode {
 
 		this.footer.invalidate();
 		this.programStatus.handleEvent(event);
+		this.syncStartScreen?.();
 
 		switch (event.type) {
 			case "agent_start":
@@ -5719,6 +5806,7 @@ export class InteractiveMode {
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.editor);
 			this.ui.setFocus(this.editor);
+			this.ui.requestRender();
 		};
 		const created = create(done);
 		dispose = created.dispose;
@@ -7507,6 +7595,7 @@ export class InteractiveMode {
 			} else {
 				this.showWarning("Usage: /name <name>");
 			}
+			this.syncStartScreen?.();
 			this.ui.requestRender();
 			return;
 		}
@@ -7519,6 +7608,7 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new Spacer(1));
 		const displayName = sessionName ?? name;
 		this.chatContainer.addChild(new ThemedText(() => theme.fg("dim", `Session name set: ${displayName}`), 1, 0));
+		this.syncStartScreen?.();
 		this.ui.requestRender();
 	}
 
@@ -7600,6 +7690,7 @@ export class InteractiveMode {
 
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new ThemedText(renderInfo, 1, 0));
+		this.syncStartScreen?.();
 		this.ui.requestRender();
 	}
 
@@ -7621,6 +7712,7 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(this.createChangelogMarkdown(changelogMarkdown, 1, 1));
 		this.chatContainer.addChild(new DynamicBorder());
+		this.syncStartScreen?.();
 		this.ui.requestRender();
 	}
 
@@ -7752,6 +7844,7 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Markdown(hotkeys.trim(), 1, 1, this.getMarkdownThemeWithSettings()));
 		this.chatContainer.addChild(new DynamicBorder());
+		this.syncStartScreen?.();
 		this.ui.requestRender();
 	}
 
@@ -7762,8 +7855,12 @@ export class InteractiveMode {
 			if (result.cancelled) {
 				return;
 			}
-			this.chatContainer.addChild(new Spacer(1));
-			this.chatContainer.addChild(new ThemedText(() => theme.fg("accent", "✓ New session started"), 1, 1));
+			this.chatContainer.clear();
+			this.syncStartScreen?.();
+			if (!this.showStartScreen) {
+				this.chatContainer.addChild(new Spacer(1));
+				this.chatContainer.addChild(new ThemedText(() => theme.fg("accent", "✓ New session started"), 1, 1));
+			}
 			this.ui.requestRender();
 		} catch (error: unknown) {
 			await this.handleFatalRuntimeError("Failed to create session", error);
@@ -7800,6 +7897,7 @@ export class InteractiveMode {
 		this.chatContainer.addChild(
 			new ThemedText(() => `${theme.fg("accent", "✓ Debug log written")}\n${theme.fg("muted", debugLogPath)}`, 1, 1),
 		);
+		this.syncStartScreen?.();
 		this.ui.requestRender();
 	}
 
@@ -7807,12 +7905,14 @@ export class InteractiveMode {
 		if (playArmin3d(this.renderer)) return;
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new ArminComponent(this.ui));
+		this.syncStartScreen?.();
 		this.ui.requestRender();
 	}
 
 	private handleDementedDelves(): void {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new EarendilAnnouncementComponent());
+		this.syncStartScreen?.();
 		this.ui.requestRender();
 	}
 

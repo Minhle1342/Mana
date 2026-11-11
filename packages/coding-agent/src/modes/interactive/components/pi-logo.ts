@@ -1,40 +1,45 @@
-import { backgroundAnsi, foregroundAnsi, isAppleTerminalSession, rgbColor } from "@earendil-works/pi-tui";
+import { foregroundAnsi, isAppleTerminalSession, rgbColor } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
 
 const CORAL = rgbColor(228, 138, 122);
-const BLUE = rgbColor(79, 142, 179);
 const YELLOW = rgbColor(234, 182, 93);
 const RESET = "\x1b[0m";
 
 /**
- * The pi logo: 4 cells wide and 2 lines tall. Each cell shows two square pixels with half blocks:
- *
- *   coral coral coral .
- *   blue  .     coral .
- *   blue  blue  .     yellow
- *   blue  .     .     yellow
- *
- * The brand colors stay fixed across themes; they follow the terminal's color mode.
+ * The MANA wordmark in the ANSI Shadow font: 6 lines tall and 40 cells wide. The first line is padded
+ * to the same width as the rest so every line centers the same way.
  */
-export function piLogoLines(): [string, string] {
-	const mode = theme.getColorMode();
-	const fg = (color: typeof CORAL) => foregroundAnsi(color, mode);
-	// The fourth cell of the top line is empty, so it is padded to the same width as the bottom line.
-	const top = `${fg(CORAL)}${backgroundAnsi(BLUE, mode)}▀${RESET}${fg(CORAL)}▀█${RESET} `;
-	const bottom = `${fg(BLUE)}█▀${RESET} ${fg(YELLOW)}█${RESET}`;
-	return [top, bottom];
+const MANA_LOGO_LINES = [
+	"███╗   ███╗  █████╗  ███╗   ██╗  █████╗ ",
+	"████╗ ████║ ██╔══██╗ ████╗  ██║ ██╔══██╗",
+	"██╔████╔██║ ███████║ ██╔██╗ ██║ ███████║",
+	"██║╚██╔╝██║ ██╔══██║ ██║╚██╗██║ ██╔══██║",
+	"██║ ╚═╝ ██║ ██║  ██║ ██║ ╚████║ ██║  ██║",
+	"╚═╝     ╚═╝ ╚═╝  ╚═╝ ╚═╝  ╚═══╝ ╚═╝  ╚═╝",
+] as const;
+
+/** The full MANA block logo, uncolored. Callers apply theme colors. */
+export function manaLogoLines(): readonly string[] {
+	return MANA_LOGO_LINES;
 }
 
 /**
- * Whether the terminal renders the half-block logo correctly. Apple Terminal draws gaps between rows and
- * misaligns the half blocks, so it gets the text wordmark instead.
+ * Whether the terminal renders the block logo correctly. Apple Terminal draws gaps between rows and
+ * misaligns the block characters, so it gets the text wordmark instead.
  */
-export function supportsPiLogo(): boolean {
+export function supportsManaLogo(): boolean {
 	return !isAppleTerminalSession();
 }
 
-/** Text fallback for the logo: "Pi" with the logo's coral and yellow. */
-export function piWordmark(): string {
+/** Text fallback for the logo: "Mana" with the logo's coral and yellow. */
+export function manaWordmark(): string {
 	const mode = theme.getColorMode();
-	return `${foregroundAnsi(CORAL, mode)}P${RESET}${foregroundAnsi(YELLOW, mode)}i${RESET}`;
+	return `${foregroundAnsi(CORAL, mode)}M${RESET}${foregroundAnsi(YELLOW, mode)}ana${RESET}`;
 }
+
+/** Deprecated compatibility alias for manaLogoLines. */
+export const piLogoLines = manaLogoLines;
+/** Deprecated compatibility alias for supportsManaLogo. */
+export const supportsPiLogo = supportsManaLogo;
+/** Deprecated compatibility alias for manaWordmark. */
+export const piWordmark = manaWordmark;
