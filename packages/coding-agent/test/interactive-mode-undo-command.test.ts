@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { BUILTIN_SLASH_COMMANDS } from "../src/core/slash-commands.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
+import { stripAnsi } from "../src/utils/ansi.ts";
 
 describe("InteractiveMode /undo and /revert commands", () => {
 	it("registers /undo and /revert in BUILTIN_SLASH_COMMANDS", () => {
@@ -13,13 +15,13 @@ describe("InteractiveMode /undo and /revert commands", () => {
 		expect(revertCmd?.description.toLowerCase()).toContain("revert");
 	});
 
-	it("executes /undo and shows status on success", async () => {
+	it("executes /undo and shows a colorized status on success", async () => {
 		const undoToCheckpoint = vi.fn(async () => ({
 			revertId: "rev-1",
 			revertAdded: 5,
 			revertDeleted: 2,
 		}));
-		const showStatus = vi.fn();
+		const showStyledStatus = vi.fn();
 		const showError = vi.fn();
 		const showWarning = vi.fn();
 		const clearStatusIndicator = vi.fn();
@@ -36,7 +38,7 @@ describe("InteractiveMode /undo and /revert commands", () => {
 		};
 		instance.defaultEditor = {};
 		instance.editor = { setText };
-		instance.showStatus = showStatus;
+		instance.showStyledStatus = showStyledStatus;
 		instance.showError = showError;
 		instance.showWarning = showWarning;
 		instance.clearStatusIndicator = clearStatusIndicator;
@@ -47,9 +49,11 @@ describe("InteractiveMode /undo and /revert commands", () => {
 
 		expect(setText).toHaveBeenCalledWith("");
 		expect(undoToCheckpoint).toHaveBeenCalledWith(undefined);
-		expect(showStatus).toHaveBeenCalledWith(
-			"Undid changes to checkpoint (+2 restored, -5 removed). Use /revert to restore.",
-		);
+		initTheme("dark");
+		const message = showStyledStatus.mock.calls[0]?.[0]();
+		expect(stripAnsi(message)).toBe("Undid changes to checkpoint (+2 restored, -5 removed). Use /revert to restore.");
+		expect(message).toContain(theme.fg("toolDiffAdded", "+2 restored"));
+		expect(message).toContain(theme.fg("toolDiffRemoved", "-5 removed"));
 		expect(showError).not.toHaveBeenCalled();
 		expect(showWarning).not.toHaveBeenCalled();
 	});
@@ -60,7 +64,7 @@ describe("InteractiveMode /undo and /revert commands", () => {
 			revertAdded: 0,
 			revertDeleted: 1,
 		}));
-		const showStatus = vi.fn();
+		const showStyledStatus = vi.fn();
 		const setText = vi.fn();
 
 		const instance = Object.create(InteractiveMode.prototype);
@@ -74,7 +78,7 @@ describe("InteractiveMode /undo and /revert commands", () => {
 		};
 		instance.defaultEditor = {};
 		instance.editor = { setText };
-		instance.showStatus = showStatus;
+		instance.showStyledStatus = showStyledStatus;
 		instance.showError = vi.fn();
 		instance.showWarning = vi.fn();
 		instance.clearStatusIndicator = vi.fn();
@@ -84,9 +88,9 @@ describe("InteractiveMode /undo and /revert commands", () => {
 		await instance.defaultEditor.onSubmit("/undo 3");
 
 		expect(undoToCheckpoint).toHaveBeenCalledWith("3");
-		expect(showStatus).toHaveBeenCalledWith(
-			"Undid changes to checkpoint (+1 restored, -0 removed). Use /revert to restore.",
-		);
+		initTheme("dark");
+		const message = showStyledStatus.mock.calls[0]?.[0]();
+		expect(stripAnsi(message)).toBe("Undid changes to checkpoint (+1 restored, -0 removed). Use /revert to restore.");
 	});
 
 	it("rejects /undo while agent is streaming", async () => {

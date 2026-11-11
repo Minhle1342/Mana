@@ -543,7 +543,7 @@ export class InteractiveMode {
 	// Status line tracking (for mutating immediately-sequential status updates)
 	private lastStatusSpacer: Spacer | undefined = undefined;
 	private lastStatusText: ThemedText | undefined = undefined;
-	private lastStatusMessage = "";
+	private lastStatusBuild: () => string = () => "";
 	private managedToolStatusStarted = false;
 
 	// Streaming message tracking
@@ -3955,8 +3955,9 @@ export class InteractiveMode {
 				this.clearStatusIndicator();
 				try {
 					const result = await this.session.checkpointManager.undoToCheckpoint(arg ? arg : undefined);
-					this.showStatus(
-						`Undid changes to checkpoint (+${result.revertDeleted} restored, -${result.revertAdded} removed). Use /revert to restore.`,
+					this.showStyledStatus(
+						() =>
+							`${theme.fg("dim", "Undid changes to checkpoint (")}${theme.fg("toolDiffAdded", `+${result.revertDeleted} restored`)}, ${theme.fg("toolDiffRemoved", `-${result.revertAdded} removed`)}${theme.fg("dim", "). Use /revert to restore.")}`,
 					);
 				} catch (error: unknown) {
 					this.showError(`Failed to undo: ${error instanceof Error ? error.message : String(error)}`);
@@ -4548,20 +4549,25 @@ export class InteractiveMode {
 	 * we update the previous status line instead of appending new ones to avoid log spam.
 	 */
 	private showStatus(message: string): void {
+		this.showStyledStatus(() => theme.fg("dim", message));
+	}
+
+	/** Show a status message whose segments carry their own colors, rebuilt on theme changes. */
+	private showStyledStatus(build: () => string): void {
 		const children = this.chatContainer.children;
 		const last = children.length > 0 ? children[children.length - 1] : undefined;
 		const secondLast = children.length > 1 ? children[children.length - 2] : undefined;
 
 		if (last && secondLast && last === this.lastStatusText && secondLast === this.lastStatusSpacer) {
-			this.lastStatusMessage = message;
+			this.lastStatusBuild = build;
 			this.lastStatusText.invalidate();
 			this.ui.requestRender();
 			return;
 		}
 
 		const spacer = new Spacer(1);
-		this.lastStatusMessage = message;
-		const text = new ThemedText(() => theme.fg("dim", this.lastStatusMessage), 1, 0);
+		this.lastStatusBuild = build;
+		const text = new ThemedText(() => this.lastStatusBuild(), 1, 0);
 		this.chatContainer.addChild(spacer);
 		this.chatContainer.addChild(text);
 		this.lastStatusSpacer = spacer;

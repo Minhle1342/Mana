@@ -5,6 +5,7 @@
 ### Added
 
 - Added `/undo` and `/revert` slash commands to restore workspace changes to previous turn checkpoints and revert undo operations.
+- Edit tool errors for text that cannot be found now list the closest lines in the file with their line numbers.
 
 ## [1.5.2] - 2026-11-10
 
