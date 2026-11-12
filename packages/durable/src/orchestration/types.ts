@@ -20,6 +20,8 @@ export type AgentGroupRequest = {
 /** One agent of a group, after the group was created. */
 export type AgentSlot = {
 	readonly name: string;
+	/** The task the agent runs. */
+	readonly task: string;
 	readonly conversationId: ConversationId;
 };
 

@@ -136,7 +136,15 @@ export type {
 } from "./harness/types.ts";
 export { UsageDoc, type UsageState } from "./harness/usage.ts";
 export type { ConversationView, ConversationWindow } from "./harness/view.ts";
+export {
+	type AgentDriver,
+	type AgentDriverInput,
+	type AgentDriverRequest,
+	createDrivers,
+	OrchestratedAgent,
+} from "./orchestration/agent-task.ts";
 export { createGroup } from "./orchestration/group.ts";
+export { type AgentJoinHost, type AgentJoinRequest, joinAgents } from "./orchestration/join.ts";
 export type {
 	AgentGroup,
 	AgentGroupRequest,

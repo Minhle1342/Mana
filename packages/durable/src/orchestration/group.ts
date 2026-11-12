@@ -13,7 +13,7 @@ export async function createGroup(tx: Tx, request: AgentGroupRequest): Promise<A
 	for (const agent of request.agents) {
 		const record = await tx.createConversation({ ownership: { kind: "task", taskId: request.ownerTaskId } });
 		if (agent.agent !== undefined) await configure(tx, record.id, agent.agent);
-		agents.push({ name: agent.name, conversationId: record.id });
+		agents.push({ name: agent.name, task: agent.task, conversationId: record.id });
 	}
 	return { agents };
 }
