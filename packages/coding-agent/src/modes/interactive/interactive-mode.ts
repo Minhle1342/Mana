@@ -4106,16 +4106,7 @@ export class InteractiveMode {
 					return;
 				}
 				const arg = text.startsWith("/undo ") ? text.slice(6).trim() : undefined;
-				this.clearStatusIndicator();
-				try {
-					const result = await this.session.checkpointManager.undoToCheckpoint(arg ? arg : undefined);
-					this.showStyledStatus(
-						() =>
-							`${theme.fg("dim", "Undid changes to checkpoint (")}${theme.fg("toolDiffAdded", `+${result.revertDeleted} restored`)}, ${theme.fg("toolDiffRemoved", `-${result.revertAdded} removed`)}${theme.fg("dim", "). Use /revert to restore.")}`,
-					);
-				} catch (error: unknown) {
-					this.showError(`Failed to undo: ${error instanceof Error ? error.message : String(error)}`);
-				}
+				await this.executeUndo(arg);
 				return;
 			}
 			if (text === "/revert") {
@@ -4690,6 +4681,81 @@ export class InteractiveMode {
 		return textBlocks.map((c) => (c as { text: string }).text).join("");
 	}
 
+	private findUserMessageTurnId(message: Message, messageId?: string): string | number | undefined {
+		if (messageId) {
+			const entries = this.sessionManager.getEntries();
+			let userTurnCount = 0;
+			for (const entry of entries) {
+				if (entry.type === "message" && entry.message.role === "user") {
+					userTurnCount++;
+					if (entry.id === messageId) {
+						return userTurnCount;
+					}
+				}
+			}
+		}
+
+		const messages = this.session.messages;
+		let userIndex = 0;
+		for (const m of messages) {
+			if (m.role === "user") {
+				userIndex++;
+				if (m === message) {
+					return userIndex;
+				}
+			}
+		}
+		return userIndex > 0 ? userIndex : undefined;
+	}
+
+	private async executeUndo(turnId?: string | number): Promise<void> {
+		this.clearStatusIndicator();
+		try {
+			const result = await this.session.checkpointManager.undoToCheckpoint(turnId);
+			this.showStyledStatus(
+				() =>
+					`${theme.fg("dim", "Undid changes to checkpoint (")}${theme.fg("toolDiffAdded", `+${result.revertDeleted} restored`)}, ${theme.fg("toolDiffRemoved", `-${result.revertAdded} removed`)}${theme.fg("dim", "). Use /revert to restore.")}`,
+			);
+		} catch (error: unknown) {
+			this.showError(`Failed to undo: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	private async showUndoModal(turnId?: string | number): Promise<void> {
+		if (this.session.isStreaming) {
+			this.showWarning("Wait for the current response to finish before undoing.");
+			return;
+		}
+		if (this.session.isCompacting) {
+			this.showWarning("Wait for compaction to finish before undoing.");
+			return;
+		}
+		if (this.session.isBashRunning) {
+			this.showWarning("Wait for the running command to finish before undoing.");
+			return;
+		}
+
+		let diffSummary = "";
+		try {
+			const diff = await this.session.checkpointManager.getCheckpointDiff(turnId);
+			if (!diff.hasCheckpoint) {
+				diffSummary = "\n(No checkpoint found before this message)";
+			} else {
+				diffSummary = `\n(+${diff.added} lines restored, -${diff.deleted} lines removed)`;
+			}
+		} catch (err: unknown) {
+			diffSummary = `\n(Error computing changes: ${err instanceof Error ? err.message : String(err)})`;
+		}
+
+		const confirmed = await this.showExtensionConfirm(
+			"Undo Checkpoint",
+			`Undo code changes to the checkpoint before this message?${diffSummary}`,
+		);
+		if (confirmed) {
+			await this.executeUndo(turnId);
+		}
+	}
+
 	/** Show a managed-tool status update in the chat. */
 	private showManagedToolStatus(status: ToolStatus): void {
 		if (!this.managedToolStatusStarted) {
@@ -4836,6 +4902,10 @@ export class InteractiveMode {
 					if (this.chatContainer.children.length > 0) {
 						this.chatContainer.addChild(new Spacer(1));
 					}
+					const turnId = this.findUserMessageTurnId(message, options?.messageId);
+					const onUserMessageClick = () => {
+						void this.showUndoModal(turnId);
+					};
 					const skillBlock = parseSkillBlock(textContent);
 					if (skillBlock) {
 						// Render skill block (collapsible)
@@ -4859,6 +4929,7 @@ export class InteractiveMode {
 								this.getMarkdownTransformers(),
 								options?.messageId,
 								options?.timestamp,
+								onUserMessageClick,
 							);
 							this.chatContainer.addChild(userComponent);
 						}
@@ -4870,6 +4941,7 @@ export class InteractiveMode {
 							this.getMarkdownTransformers(),
 							options?.messageId,
 							options?.timestamp,
+							onUserMessageClick,
 						);
 						this.chatContainer.addChild(userComponent);
 					}

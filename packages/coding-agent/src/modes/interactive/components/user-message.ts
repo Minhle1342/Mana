@@ -1,4 +1,4 @@
-import { Container, Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { Container, Markdown, type MarkdownTheme, MouseRegion } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
@@ -17,6 +17,7 @@ export class UserMessageComponent extends Container {
 	private markdownTransformers: readonly MarkdownTransformer[];
 	private messageId?: string;
 	private timestamp?: string;
+	private onClick?: () => void;
 
 	constructor(
 		text: string,
@@ -25,6 +26,7 @@ export class UserMessageComponent extends Container {
 		markdownTransformers: readonly MarkdownTransformer[] = [],
 		messageId?: string,
 		timestamp?: string,
+		onClick?: () => void,
 	) {
 		super();
 		this.text = text;
@@ -33,6 +35,7 @@ export class UserMessageComponent extends Container {
 		this.markdownTransformers = markdownTransformers;
 		this.messageId = messageId;
 		this.timestamp = timestamp;
+		this.onClick = onClick;
 		this.rebuild();
 	}
 
@@ -45,29 +48,39 @@ export class UserMessageComponent extends Container {
 		this.clear();
 		// The Markdown pads and colors its own background: a Box around it would keep a second full-width copy of every
 		// line, with identical output.
-		this.addChild(
-			new Markdown(
-				this.text,
-				this.outputPad,
-				1,
-				this.markdownTheme,
-				{
-					color: (content: string) => theme.fg("userMessageText", content),
-					bgColor: (content: string) => theme.bg("userMessageBg", content),
-				},
-				{
-					preserveOrderedListMarkers: true,
-					preserveBackslashEscapes: true,
-					transform: createMarkdownTransform(
-						"user",
-						() => false,
-						this.markdownTransformers,
-						this.messageId,
-						this.timestamp,
-					),
-				},
-			),
+		const markdownComponent = new Markdown(
+			this.text,
+			this.outputPad,
+			1,
+			this.markdownTheme,
+			{
+				color: (content: string) => theme.fg("userMessageText", content),
+				bgColor: (content: string) => theme.bg("userMessageBg", content),
+			},
+			{
+				preserveOrderedListMarkers: true,
+				preserveBackslashEscapes: true,
+				transform: createMarkdownTransform(
+					"user",
+					() => false,
+					this.markdownTransformers,
+					this.messageId,
+					this.timestamp,
+				),
+			},
 		);
+
+		if (this.onClick) {
+			this.addChild(
+				new MouseRegion(markdownComponent, (event) => {
+					if (event.type !== "click" || event.button !== "left") return undefined;
+					this.onClick?.();
+					return { handled: true };
+				}),
+			);
+		} else {
+			this.addChild(markdownComponent);
+		}
 	}
 
 	override render(width: number): string[] {
