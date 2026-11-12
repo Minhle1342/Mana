@@ -6551,7 +6551,53 @@ These are contracts, not invitations to add defensive machinery:
   without durable mode it does not promise acknowledged commits survive power or
   host failure.
 
-## 13. Non-goals
+## 13. Orchestration
+
+An **orchestration layer** creates a **group** of agents: several conversations,
+each with its own agent state, in one commit. It is a mechanism, not a view.
+
+### 13.1 The group
+
+`createGroup(tx, request)` creates one conversation per requested agent and
+returns the group. The request names:
+
+- the **agents**: a name each, the task it runs, and an optional **profile** —
+  an `AgentChange` the conversation's `pi.agent` gets (section 2.2). A field the
+  profile leaves out keeps the value the conversation inherited; `null` clears
+  it.
+- the **owner**: the task that owns the group's conversations. Every
+  conversation of the group is owned by it, so aborting it reaches the whole
+  group (section 5.5) and the group cannot outlive it.
+
+The group is created in the caller's commit, next to whatever else that commit
+writes; a commit that fails leaves no conversation of it. The layer keeps no
+document for the group: the group's state is its conversations, and a host that
+needs more (names, locations, a status) keeps it in its own store, where it
+already owns it.
+
+### 13.2 Driving a group
+
+A host may drive the agents itself. The layer also offers a one-shot drive:
+
+- a **driver task** per agent, owned by the caller's task, submits the agent's
+  prompt to its conversation with a request ID derived from the driver's task
+  ID, waits for the answer, and ends with that answer as its outcome;
+- a **join** waits for every driver of the group and returns one result per
+  agent: answered, failed or aborted. One agent's failure does not hide the
+  others' answers.
+
+The driver is an ordinary task (section 5): it resumes from its checkpoint
+after a restart, and the request ID keeps a rerun from submitting the prompt
+twice.
+
+### 13.3 What the layer does not do
+
+- It creates no group document, and it owns no fact a host already owns.
+- It defines no view: a host shows the group in its own terms.
+- It does not change a conversation's lifetime: a host that owns its
+  conversations (through a background anchor, say) keeps that ownership.
+
+## 14. Non-goals
 
 Durable has no:
 
