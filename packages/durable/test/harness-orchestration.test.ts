@@ -3,7 +3,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai";
 import {
 	AgentDoc,
@@ -19,8 +18,9 @@ import {
 	MemoryStorage,
 	OrchestratedAgent,
 } from "@earendil-works/pi-durable";
-import { chatSetup, openChat, unanswered } from "./chat-support.ts";
+import { describe, expect, it } from "vitest";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
+import { chatSetup, openChat, unanswered } from "./chat-support.ts";
 import { context } from "./session-support.ts";
 import { openTasks } from "./task-support.ts";
 
@@ -55,10 +55,7 @@ const Orchestrator = defineTask<
 			}, ctx),
 		join: async (task, runtime, ctx) => {
 			const results = await joinAgents(runtime, { drivers: task.state.checkpoint.drivers }, ctx);
-			await runtime.commit(
-				() => ({ status: "terminal", outcome: { status: "completed", result: results } }),
-				ctx,
-			);
+			await runtime.commit(() => ({ status: "terminal", outcome: { status: "completed", result: results } }), ctx);
 		},
 	},
 	abort: async (_task, runtime, ctx) =>

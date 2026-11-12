@@ -16,9 +16,9 @@ import {
 	defineExtension,
 	defineTask,
 	Harness,
+	joinAgents,
 	MemoryStorage,
 	OrchestratedAgent,
-	joinAgents,
 } from "../../src/index.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -45,10 +45,7 @@ const Orchestrator = defineTask<
 		// The drivers run at once; the join waits for all of them.
 		join: async (task, runtime, ctx) => {
 			const results = await joinAgents(runtime, { drivers: task.state.checkpoint.drivers }, ctx);
-			await runtime.commit(
-				() => ({ status: "terminal", outcome: { status: "completed", result: results } }),
-				ctx,
-			);
+			await runtime.commit(() => ({ status: "terminal", outcome: { status: "completed", result: results } }), ctx);
 		},
 	},
 	abort: async (_task, runtime, ctx) =>

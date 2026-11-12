@@ -72,13 +72,10 @@ export const OrchestratedAgent = defineTask<AgentDriverInput, { phase: "run" }, 
 				);
 				return;
 			}
-			await runtime.commit(
-				async (tx) => {
-					const answer = await tx.entry(AssistantEntry, settled.answer);
-					return { status: "terminal", outcome: { status: "completed", result: textOf(answer?.model?.[0]) } };
-				},
-				ctx,
-			);
+			await runtime.commit(async (tx) => {
+				const answer = await tx.entry(AssistantEntry, settled.answer);
+				return { status: "terminal", outcome: { status: "completed", result: textOf(answer?.model?.[0]) } };
+			}, ctx);
 		},
 	},
 	abort: async (_task, runtime, ctx) =>
