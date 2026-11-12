@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- An orchestration layer: `createGroup(tx, request)` creates a group of agents in one commit (one conversation per agent, each owned by the task the caller names, each with the profile it asked for), `createDrivers` gives every agent a task that runs it to its answer, and `joinAgents` waits for the group and returns one result per agent — answered, failed or aborted — so one agent's failure does not hide the others' answers. The layer keeps no document for the group: the host owns the metadata it needs in its own store. See the spec's section 13.
+
 ## [1.5.2] - 2026-11-10
 
 ## [1.5.1] - 2026-11-09

@@ -29,6 +29,7 @@ Built on [`@earendil-works/pi-ai`](../ai/README.md) for model access and `@earen
 - [More Conversations and Forks](#more-conversations-and-forks)
 - [Abort and Subagents](#abort-and-subagents)
 - [Child Tasks](#child-tasks)
+- [Orchestrating Agents](#orchestrating-agents)
 - [Task Graph](#task-graph)
 - [Your Own State](#your-own-state)
 - [Usage and Cost](#usage-and-cost)
@@ -795,6 +796,24 @@ decide: async (task, runtime, context) => {
 - **Aborting:** abort runs bottom-up. Aborting a task aborts the work it owns first, and its own abort handler starts only once that work is done, so each task undoes its own effects.
 
 [`23-child-tasks.ts`](test/examples/23-child-tasks.ts) runs a checkout with four payments: a declined card, a cancelled checkout, and a restart while the payments run.
+
+## Orchestrating Agents
+
+`createGroup(tx, request)` creates a group of agents in one commit: one conversation per agent, each owned by the task the caller names, each with the profile it asked for (model, thinking level, cwd, tools, extensions, instructions).
+
+```typescript
+const group = await createGroup(tx, {
+	ownerTaskId: task.id,
+	agents: [
+		{ name: "reader", task: "Read the file.", agent: { cwd: "/work/read" } },
+		{ name: "scout", task: "Scout the repository." },
+	],
+});
+```
+
+The layer also drives a group to its answers: `createDrivers` gives every agent a task that runs it in its own conversation, and `joinAgents` waits for them and returns one result per agent — answered, failed or aborted — so one agent's failure does not hide the others' answers.
+
+The layer keeps no document for the group: the host owns the metadata it needs for it (names, locations, a status) in its own store, where it already keeps it.
 
 ## Task Graph
 
