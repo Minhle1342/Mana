@@ -179,6 +179,7 @@ import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
 import { StartScreen } from "./components/start-screen.ts";
+import { StartupBackdrop } from "./components/startup-backdrop.ts";
 import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
@@ -270,6 +271,12 @@ class ExpandableText extends ThemedText implements Expandable {
 /** The built-in header. Clicking its logo (the first two lines, after one column of padding) plays an easter egg. */
 class BuiltInHeader extends ExpandableText {
 	onLogoClick: ((column: number, row: number) => void) | undefined;
+	backdrop: StartupBackdrop | undefined;
+
+	override render(width: number): string[] {
+		const lines = super.render(width);
+		return this.backdrop ? this.backdrop.composite(width, lines) : lines;
+	}
 
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
 		if (event.type !== "click" || event.y > 1 || event.x < 1 || event.x > 4 || !this.onLogoClick) return undefined;
@@ -490,6 +497,20 @@ interface TabRetryUiState {
 	pendingRetry?: { attempt: number; maxAttempts: number; delayMs: number };
 }
 
+/** Whether the active tab's session has nothing to show yet: no messages, chat lines, or running turn. */
+function startupSessionEmpty(
+	tabManager: Pick<SessionTabManager, "getActiveTab"> | undefined,
+	chatContainer: Pick<Container, "children"> | undefined,
+): boolean {
+	const slot = tabManager?.getActiveTab();
+	if (!slot) return false;
+	if (slot.session?.isStreaming) return false;
+	if (chatContainer && chatContainer.children.length > 0) return false;
+	const messages = slot.session?.messages;
+	if (messages) return messages.length === 0;
+	return (slot.session?.sessionManager?.getEntryCount() ?? 0) === 0;
+}
+
 export class InteractiveMode {
 	private runtimeHost?: AgentSessionRuntime;
 	private tabManager!: SessionTabManager;
@@ -650,6 +671,7 @@ export class InteractiveMode {
 	private startScreen!: StartScreen;
 	private startScreenLayoutRoot: Component | undefined;
 	private showStartScreen: boolean | undefined = undefined;
+	private startupBackdrop: StartupBackdrop | undefined;
 
 	private options: InteractiveModeOptions;
 	private readonly onRightClickPaste = (): void => {
@@ -1098,10 +1120,12 @@ export class InteractiveMode {
 
 		// Start screen for empty sessions: the editor's output is rendered here
 		// (the editor stays mounted in the dock).
+		this.startupBackdrop = new StartupBackdrop({ requestRender: () => this.ui.requestRender() });
 		this.startScreen = new StartScreen({
 			logoLines: manaLogoLines(),
 			editor: this.editorContainer,
 			footer: this.footerContainer,
+			backdrop: this.startupBackdrop,
 			getHeight: () =>
 				Math.max(
 					1,
@@ -1192,6 +1216,7 @@ export class InteractiveMode {
 				0,
 			);
 			header.onLogoClick = (column, row) => playManaLogo3d(this.renderer, column, row);
+			header.backdrop = this.startupBackdrop;
 			this.builtInHeader = header;
 
 			// Setup UI layout
@@ -2728,13 +2753,7 @@ export class InteractiveMode {
 	/** Whether the start screen should be shown for the active tab (empty, not streaming, in fullscreen mode). */
 	private isStartScreenVisible(): boolean {
 		if (this.renderer && this.renderer.mode !== "fullscreen") return false;
-		const slot = this.tabManager?.getActiveTab();
-		if (!slot) return false;
-		if (slot.session?.isStreaming) return false;
-		if (this.chatContainer && this.chatContainer.children.length > 0) return false;
-		const messages = slot.session?.messages;
-		if (messages) return messages.length === 0;
-		return (slot.session?.sessionManager?.getEntryCount() ?? 0) === 0;
+		return startupSessionEmpty(this.tabManager, this.chatContainer);
 	}
 
 	/** Rebuild the mounted layout when the start screen's visibility changes. */
@@ -2778,10 +2797,22 @@ export class InteractiveMode {
 
 	/** Sync start screen visibility with the active tab's session state and remount the layout. */
 	private syncStartScreen(): void {
+		this.syncStartupBackground();
 		const active = this.isStartScreenVisible();
 		if (active === this.showStartScreen) return;
 		this.showStartScreen = active;
 		this.rebuildLayout();
+	}
+
+	/** Animate the shared backdrop only while a startup view is showing. */
+	private syncStartupBackground(): void {
+		// The regular-mode startup header sits in front of the same empty session the fullscreen start screen shows;
+		// a custom header replaces it, and the fullscreen renderer draws the start screen instead.
+		const regularStartup =
+			this.customHeader === undefined &&
+			this.renderer?.mode !== "fullscreen" &&
+			startupSessionEmpty(this.tabManager, this.chatContainer);
+		this.startupBackdrop?.setActive(regularStartup || this.isStartScreenVisible());
 	}
 
 	private async handleFatalRuntimeError(prefix: string, error: unknown): Promise<never> {
@@ -8035,6 +8066,7 @@ export class InteractiveMode {
 			this.ui.terminal.setProgress(false);
 		}
 		this.clearStatusIndicator();
+		this.startupBackdrop?.dispose();
 		this.themeController.disableAutoSync();
 		this.clearExtensionTerminalInputListeners();
 		this.footer.dispose();

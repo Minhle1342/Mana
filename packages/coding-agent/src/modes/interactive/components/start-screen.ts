@@ -11,6 +11,7 @@ import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-wo
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
 import { manaWordmark, supportsManaLogo } from "./pi-logo.ts";
+import type { StartupBackdrop } from "./startup-backdrop.ts";
 
 export interface StartScreenProps {
 	readonly logoLines: readonly string[];
@@ -19,6 +20,8 @@ export interface StartScreenProps {
 	readonly footer: Component;
 	/** Current terminal height in rows, queried on every render so resizes stay centered. */
 	readonly getHeight: () => number;
+	/** Animated background shared with the regular-mode header; absent keeps the plain screen. */
+	readonly backdrop?: StartupBackdrop;
 	onLogoClick?: (column: number, row: number) => void;
 }
 
@@ -27,14 +30,32 @@ function logoWidth(logoLines: readonly string[]): number {
 	return Math.max(...logoLines.map((line) => visibleWidth(line)));
 }
 
+/** Left column that centers `cells` columns of content in `width`, or 0 when they do not fit. */
+function centeredLeft(cells: number, width: number): number {
+	return cells >= width ? 0 : Math.floor((width - cells) / 2);
+}
+
 /** Pad a single rendered line with spaces so its visible content is centered in `width`. */
 function centerLine(line: string, width: number): string {
 	const safeWidth = Math.max(1, width);
 	const vw = visibleWidth(line);
 	if (vw >= safeWidth) return line;
-	const left = Math.floor((safeWidth - vw) / 2);
+	const left = centeredLeft(vw, safeWidth);
 	const right = safeWidth - vw - left;
 	return " ".repeat(left) + line + " ".repeat(right);
+}
+
+/** `part` in the dim color, or nothing when there is nothing to draw. */
+function dimPart(part: string): string {
+	return part.length > 0 ? theme.fg("dim", part) : "";
+}
+
+/**
+ * `line` placed at column `left` over a background row. The rest of the row keeps the background, dimmed, so the line
+ * stays exactly as wide as the same row without a backdrop.
+ */
+function overlayBackground(scene: string, left: number, line: string): string {
+	return dimPart(scene.slice(0, left)) + line + dimPart(scene.slice(left + visibleWidth(line)));
 }
 
 /** Start screen component: logo above editor above footer, the whole block vertically centered. */
@@ -100,6 +121,11 @@ export class StartScreen implements Component {
 		}
 
 		const coloredLogo = logo.map((line) => theme.fg("accent", line));
+		const background = this.props.backdrop?.render(safeWidth, height);
+		const backgroundRow = (row: number) => {
+			const scene = background?.[row];
+			return scene ? dimPart(scene) : " ".repeat(safeWidth);
+		};
 
 		this.logoHeight = coloredLogo.length;
 		this.renderedLogoWidth = logoWidth(logo);
@@ -116,23 +142,37 @@ export class StartScreen implements Component {
 		this.editorLeft = maxEditorWidth >= safeWidth ? 0 : Math.floor((safeWidth - maxEditorWidth) / 2);
 
 		const result: string[] = [];
-		for (let i = 0; i < this.topSpacer; i++) result.push(" ".repeat(safeWidth));
-		for (const line of coloredLogo) result.push(centerLine(line, safeWidth));
+		let row = 0;
+		for (let i = 0; i < this.topSpacer; i++) result.push(backgroundRow(row++));
+		for (const line of coloredLogo) {
+			const scene = background?.[row];
+			result.push(
+				scene
+					? overlayBackground(scene, centeredLeft(visibleWidth(line), safeWidth), line)
+					: centerLine(line, safeWidth),
+			);
+			row++;
+		}
 		for (const line of editorLines) {
 			const vw = visibleWidth(line);
+			const scene = background?.[row];
 			if (vw >= safeWidth) {
 				result.push(line);
+			} else if (scene) {
+				result.push(overlayBackground(scene, this.editorLeft, line));
 			} else {
 				const right = Math.max(0, safeWidth - vw - this.editorLeft);
 				result.push(" ".repeat(this.editorLeft) + line + " ".repeat(right));
 			}
+			row++;
 		}
 		// The footer spans the full width in the dock, so it does here too.
 		for (const line of footerLines) {
 			const vw = visibleWidth(line);
 			result.push(vw >= safeWidth ? line : line + " ".repeat(safeWidth - vw));
+			row++;
 		}
-		for (let i = 0; i < bottomSpacer; i++) result.push(" ".repeat(safeWidth));
+		for (let i = 0; i < bottomSpacer; i++) result.push(backgroundRow(row++));
 		return result;
 	}
 

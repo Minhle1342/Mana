@@ -3,6 +3,7 @@ import { Container, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { manaLogoLines } from "../src/modes/interactive/components/pi-logo.ts";
 import { StartScreen } from "../src/modes/interactive/components/start-screen.ts";
+import { StartupBackdrop } from "../src/modes/interactive/components/startup-backdrop.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -22,6 +23,11 @@ function mockEditor(
 /** Footer stand-in; empty by default so logo/editor row assertions keep their layout. */
 function mockFooter(lines: string[] = []): Component {
 	return mockEditor(lines);
+}
+
+/** A rendered line without SGR escapes, so column assertions count terminal cells. */
+function stripSgr(line: string): string {
+	return line.replace(/\u001b\[[0-9;]*m/g, "");
 }
 
 type StartScreenContext = {
@@ -56,6 +62,47 @@ describe("StartScreen", () => {
 		});
 		const rendered = screen.render(80);
 		expect(rendered).toHaveLength(30);
+	});
+
+	it("composites the backdrop without moving the layout", () => {
+		const backdrop = new StartupBackdrop({ requestRender: () => {} });
+		backdrop.setActive(true);
+		const screen = new StartScreen({
+			logoLines: manaLogoLines(),
+			editor: mockEditor(["> "]),
+			footer: mockFooter(),
+			backdrop,
+			getHeight: () => 30,
+		});
+		const rendered = screen.render(80);
+		backdrop.dispose();
+
+		expect(rendered).toHaveLength(30);
+		expect(rendered[11]).toContain("███╗");
+		expect(rendered[17]).toContain(">");
+		expect(rendered.some((line) => line !== " ".repeat(80))).toBe(true);
+		expect(rendered.every((line) => visibleWidth(line) === 80)).toBe(true);
+	});
+
+	it("centers each logo line over the backdrop, like the plain screen", () => {
+		const backdrop = new StartupBackdrop({ requestRender: () => {} });
+		backdrop.setActive(true);
+		const screen = new StartScreen({
+			logoLines: ["████████", "██", "████"],
+			editor: mockEditor(["> "]),
+			footer: mockFooter(),
+			backdrop,
+			getHeight: () => 20,
+		});
+		const rendered = screen.render(40);
+		backdrop.dispose();
+
+		expect(rendered).toHaveLength(20);
+		// Every row keeps the full width even though the logo lines differ: the background fills the rest.
+		expect(rendered.every((line) => visibleWidth(line) === 40)).toBe(true);
+		// 3 logo lines + 1 editor line = 4 content lines in 20 rows -> 8 top spacer rows, each logo line centered.
+		const logoInk = rendered.slice(8, 11).map((line) => stripSgr(line).indexOf("█"));
+		expect(logoInk).toEqual([16, 19, 18]);
 	});
 
 	it("vertically centers the logo and editor within the terminal height", () => {
@@ -592,6 +639,7 @@ describe("InteractiveMode.isStartScreenVisible", () => {
 		const im = {
 			showStartScreen: undefined as boolean | undefined,
 			isStartScreenVisible: () => false,
+			syncStartupBackground() {},
 			rebuildLayout() {
 				rebuildCalled = true;
 			},
@@ -647,6 +695,7 @@ describe("InteractiveMode.isStartScreenVisible", () => {
 				}),
 			},
 			isStartScreenVisible: imProto.isStartScreenVisible,
+			syncStartupBackground() {},
 			rebuildLayout() {
 				rebuildCalled = true;
 			},
@@ -663,5 +712,78 @@ describe("InteractiveMode.isStartScreenVisible", () => {
 		im.syncStartScreen();
 		expect(rebuildCalled).toBe(true);
 		expect(im.showStartScreen).toBe(false);
+	});
+});
+
+describe("InteractiveMode.syncStartupBackground", () => {
+	const methods = InteractiveMode.prototype as unknown as {
+		syncStartupBackground(this: StartupContext): void;
+		isStartScreenVisible(this: StartScreenContext): boolean;
+	};
+	type StartupContext = StartScreenContext & {
+		customHeader?: Component;
+		startupBackdrop: { setActive(active: boolean): void };
+		syncStartupBackground(): void;
+	};
+
+	function startupContext(options: {
+		mode: string;
+		messages?: unknown[];
+		streaming?: boolean;
+		chatChildren?: number;
+		customHeader?: boolean;
+	}): { context: StartupContext; active: boolean[] } {
+		const active: boolean[] = [];
+		const children = Array.from({ length: options.chatChildren ?? 0 }, (_, index) => mockEditor([`line ${index}`]));
+		const context = {
+			customHeader: options.customHeader ? mockEditor(["custom header"]) : undefined,
+			renderer: { mode: options.mode },
+			chatContainer: { children },
+			tabManager: {
+				getActiveTab: () => ({
+					session: {
+						messages: options.messages,
+						isStreaming: options.streaming ?? false,
+						sessionManager: { getEntryCount: () => options.messages?.length ?? 0 },
+					},
+				}),
+			},
+			startupBackdrop: { setActive: (value: boolean) => active.push(value) },
+			isStartScreenVisible: methods.isStartScreenVisible,
+			syncStartupBackground: methods.syncStartupBackground,
+		};
+		return { context: context as unknown as StartupContext, active };
+	}
+
+	it("animates the regular-mode header only while the session is empty", () => {
+		const empty = startupContext({ mode: "inline" });
+		empty.context.syncStartupBackground();
+		expect(empty.active).toEqual([true]);
+
+		const withMessage = startupContext({ mode: "inline", messages: [{}] });
+		withMessage.context.syncStartupBackground();
+		expect(withMessage.active).toEqual([false]);
+
+		const streaming = startupContext({ mode: "inline", streaming: true });
+		streaming.context.syncStartupBackground();
+		expect(streaming.active).toEqual([false]);
+
+		const withChatLine = startupContext({ mode: "inline", chatChildren: 1 });
+		withChatLine.context.syncStartupBackground();
+		expect(withChatLine.active).toEqual([false]);
+
+		const custom = startupContext({ mode: "inline", customHeader: true });
+		custom.context.syncStartupBackground();
+		expect(custom.active).toEqual([false]);
+	});
+
+	it("animates the fullscreen start screen, not the header band", () => {
+		const fullscreen = startupContext({ mode: "fullscreen" });
+		fullscreen.context.syncStartupBackground();
+		expect(fullscreen.active).toEqual([true]);
+
+		const fullscreenWithMessage = startupContext({ mode: "fullscreen", messages: [{}] });
+		fullscreenWithMessage.context.syncStartupBackground();
+		expect(fullscreenWithMessage.active).toEqual([false]);
 	});
 });
