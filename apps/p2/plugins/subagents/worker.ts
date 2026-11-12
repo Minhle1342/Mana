@@ -1,6 +1,12 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Models } from "@earendil-works/pi-ai/models";
-import { type ConversationId, type Harness, ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
+import {
+	type ConversationId,
+	type EntryRecord,
+	type Harness,
+	LiveDoc,
+	ROOT_CONVERSATION_ID,
+} from "@earendil-works/pi-durable";
 import {
 	type Ctx,
 	canSend,
@@ -59,6 +65,19 @@ class ChildReporter {
 /** The worker's child reporter, for methods that push what they changed (contributed by the tools' object). */
 const ChildReports = defineRegistry<ChildReporter, ChildReporter | undefined>("p2.subagents.reports", { version: 1 });
 
+/** What a subagent is doing: working (it has a run), answered (it produced an answer), or idle. */
+async function stateOf(
+	durable: Harness,
+	conversationId: ConversationId,
+	latest: EntryRecord | undefined,
+	ctx: Ctx,
+): Promise<Child["state"]> {
+	if ((await durable.snapshot(LiveDoc, conversationId, ctx))?.run !== undefined) return "working";
+	const message = latest?.model?.[0];
+	if (message?.role !== "assistant") return "idle";
+	return message.stopReason === "error" || message.stopReason === "aborted" ? "idle" : "answered";
+}
+
 /** The session's subagents and one-shot agents as the server's index lists them. */
 async function childrenOf(durable: Harness, ctx: Ctx): Promise<Child[]> {
 	const registry = await durable.snapshot(Registry, ROOT_CONVERSATION_ID, ctx);
@@ -74,6 +93,7 @@ async function childrenOf(durable: Harness, ctx: Ctx): Promise<Child[]> {
 			tools: [...agent.tools],
 			...(agent.location === undefined ? {} : { location: agent.location }),
 			lastEntryId: latest?.items[0]?.id ?? 0,
+			state: await stateOf(durable, agent.conversationId, latest?.items[0], ctx),
 			...(agent.archived ? { archived: true } : {}),
 		});
 	}
@@ -87,6 +107,7 @@ async function childrenOf(durable: Harness, ctx: Ctx): Promise<Child[]> {
 			thinkingLevel: agent.thinkingLevel,
 			tools: [...agent.tools],
 			lastEntryId: 0,
+			state: await stateOf(durable, agent.conversationId, undefined, ctx),
 		});
 	return children;
 }

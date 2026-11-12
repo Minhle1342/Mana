@@ -12,12 +12,14 @@ import {
 	BACKGROUND_CONTEXT,
 	DirectoryListingSchema,
 	evolve,
+	LocationSchema,
 	literal,
 	local,
 	ModelRefSchema,
 	method,
 	param,
 	propertiesOf,
+	record,
 	remote,
 	serverHost,
 	sessionHost,
@@ -28,6 +30,7 @@ import { Envs, EnvTestSchema, SandboxStatusSchema } from "../../plugins/envs/con
 import { SandboxMountSchema, SshEnvConfigSchema } from "../../plugins/envs/schema.ts";
 import { CreateSchema, MAX_TITLE, type Session, Sessions } from "../../plugins/sessions/contract.ts";
 import { SessionStatus } from "../../plugins/status/contract.ts";
+import { Subagents } from "../../plugins/subagents/contract.ts";
 import { SessionTree } from "../../plugins/tree/contract.ts";
 import type { Host } from "../../src/runtime/chord.ts";
 import { bound, boundIn, type Fixture, holdIn, startFixture, until } from "./helpers.ts";
@@ -354,6 +357,31 @@ const EnvsV2 = evolve(EnvsV1, (e) =>
 		.args("delete", obj({ name: str(), force: opt(bool()) })),
 );
 
+/** `Child` as it was before a child's state (the released `Subagents` v2). */
+const ChildSchemaV2 = obj({
+	name: str(),
+	kind: opt(literal("agent")),
+	callId: opt(str()),
+	archived: opt(bool()),
+	conversationId: num(),
+	model: str(),
+	thinkingLevel: str(),
+	tools: arr(str()),
+	location: opt(LocationSchema),
+	lastEntryId: num(),
+});
+
+/** `Subagents` as it was before a child's state. */
+const SubagentsV2 = remote("p2.subagents", {
+	version: 2,
+	params: {},
+	hostAddress: serverHost,
+	variants: {
+		reader: { state: { children: record(arr(ChildSchemaV2)) } },
+		reporter: { methods: { report: method(obj({ children: arr(ChildSchemaV2) })) } },
+	},
+});
+
 describe("older contract versions against the current server (fake provider)", () => {
 	let fixture: Fixture;
 	let owner: Host;
@@ -465,5 +493,17 @@ describe("older contract versions against the current server (fake provider)", (
 			label: "Versions",
 		});
 		v3.release();
+	});
+
+	it("binds Subagents v2: the children without their state", async () => {
+		const current = await boundIn(owner, Subagents, {}, "reader");
+		const rows = await until(current.children, (value) => value !== undefined);
+		assert.ok(rows);
+		current.release();
+		const ref = await boundIn(owner, SubagentsV2, {}, "reader");
+		const children = await until(ref.children, (value) => value !== undefined);
+		const old = children?.[session.id] ?? [];
+		for (const child of old) assert.equal("state" in child, false);
+		ref.release();
 	});
 });

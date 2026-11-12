@@ -273,6 +273,14 @@ describe("a group of subagents (fake provider)", () => {
 		);
 		assert.ok(texts(answered).some((text) => text.includes("Echo: hello reader")));
 		assert.ok(texts(answered).some((text) => text.includes("Echo: hello scout")));
+		// The worker reports what each agent is doing: they answered.
+		const reported = await until(children.children, (value) =>
+			value?.[session]?.every((each) => each.state === "answered"),
+		);
+		assert.deepEqual(
+			reported![session]!.map((each) => each.state),
+			["answered", "answered"],
+		);
 		// The same shape as a single-agent spawn: one creation path.
 		const single = await holdIn(owner, Chat, { session, conversation: 1 }, "participant");
 		await single.send({ text: "subagent", requestId: "spawn-single" }, BACKGROUND_CONTEXT);
