@@ -29,6 +29,7 @@ import {
 	type Gap,
 	gapKey,
 	identityKey,
+	ListOverlay,
 	lineText,
 	type MarkdownTransformer,
 	type OptimisticAdd,
@@ -64,9 +65,11 @@ import {
 import { Drafts } from "../drafts/contract.ts";
 import { MAX_ATTACHMENTS } from "../files/contract.ts";
 import { type Session, Sessions } from "../sessions/contract.ts";
+import { type Child, Subagents } from "../subagents/contract.ts";
 import { SessionTree } from "../tree/contract.ts";
 import { Chat, type EntryDisplay, SHELL_BUSY, type ShellState, TranscriptEntries } from "./contract.ts";
 import { CHAT_COMMANDS, formatSize, type LauncherUpload, registerLauncherAnswers } from "./tui-commands.ts";
+import { subagentRows, subagentStatusLines } from "./tui-subagents.ts";
 
 /** A message sent from here that the server does not show yet: in the transcript, or the queue while a run is busy. */
 type Outgoing = {
@@ -94,6 +97,17 @@ export class ChatSurface implements TuiSurface, ChatSurfaceApi {
 	private readonly status = new Container();
 	private readonly input = new Container();
 	private readonly dock: VStack;
+	/** The session's subagents, as the server lists them: the group the status line shows. */
+	private children: Readonly<Record<string, Child[]>> = {};
+	private readonly subagents: TuiScope;
+	/** The line under the composer: the group's status, green when every agent answered. */
+	private readonly subagentLine: Component = {
+		render: (width) =>
+			subagentStatusLines(this.runtime.theme.current, this.children[this.session ?? ""]).map((line) =>
+				truncateToWidth(line, width),
+			),
+		invalidate: () => {},
+	};
 	/** The composer bar's chips (`composer:<plugin>` slots, the web's SlotList "composer"), one line under the editor. */
 	private readonly chips: Component = {
 		render: (width) => {
@@ -278,7 +292,18 @@ export class ChatSurface implements TuiSurface, ChatSurfaceApi {
 			{ component: this.status, shrink: 1, minSize: 0 },
 			{ component: this.input, shrink: 1, minSize: 1 },
 			{ component: this.chips, shrink: 1, minSize: 0 },
+			{ component: this.subagentLine, shrink: 1, minSize: 0 },
 		]);
+		// The session's subagents: the group the status line shows and the selector lists.
+		this.subagents = new TuiScope(runtime);
+		this.subagents.watch(Subagents, {}, (ref, follow) => {
+			const reader = liveIn(ref, "reader");
+			if (!reader) return;
+			follow(reader.children, (value) => {
+				this.children = value;
+				this.runtime.tui.requestRender();
+			});
+		});
 		const registries = runtime.host;
 		this.stops.push(
 			followRegistry(registries, TuiToolRenderers, (table) => {
@@ -872,6 +897,33 @@ export class ChatSurface implements TuiSurface, ChatSurfaceApi {
 			if (action === "fork") this.openFork();
 			else this.openTree();
 		} else this.lastEscape = now;
+	}
+
+	/**
+	 * The selector: the session's subagents, the working ones first. Picking one opens that subagent's conversation.
+	 */
+	openAgents(): void {
+		const runtime = this.runtime;
+		const session = this.session;
+		if (!session) return;
+		const rows = subagentRows(this.children[session]);
+		if (rows.length === 0) {
+			runtime.ctx.notify("No subagents in this session", "warning");
+			return;
+		}
+		const handle = runtime.ctx.overlay(
+			"subagents",
+			new ListOverlay(runtime.ctx, {
+				title: "Subagents",
+				rows: () => rows,
+				onSelect: (row) => {
+					handle.close();
+					runtime.navigate("chat", session, Number(row.key));
+				},
+				onClose: () => handle.close(),
+			}),
+			{ width: "100%", anchor: "bottom-center" },
+		);
 	}
 
 	/**

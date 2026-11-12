@@ -9,6 +9,13 @@ const chat = (ctx: TuiContext): ChatSurface | undefined => {
 };
 
 export const CHAT_COMMANDS: Record<string, TuiCommand> = {
+	"p2.chat.agents": {
+		title: "List the session's subagents",
+		category: "Chat",
+		when: "chat && !overlay",
+		slash: { name: "agents" },
+		run: (ctx) => chat(ctx)?.openAgents(),
+	},
 	"app.interrupt": {
 		title: "Stop the agent",
 		category: "Chat",
