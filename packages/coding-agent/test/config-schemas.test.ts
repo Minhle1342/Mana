@@ -50,9 +50,10 @@ describe("generated configuration schemas", () => {
 		const schema = JSON.parse(renderConfigSchemas().get("schemas/theme.schema.json") ?? "");
 		const accent = schema.properties.colors.properties.accent;
 		const colorValue = accent.$ref ? schema.$defs.ColorValue : accent;
+		// The brand comes from the app identity, so match its shape instead of the current name.
 		expect(schema).toMatchObject({
-			title: "Pi Coding Agent Theme",
-			description: "Theme schema for Pi coding agent",
+			title: expect.stringMatching(/^.+ Coding Agent Theme$/),
+			description: expect.stringMatching(/^Theme schema for .+ coding agent$/),
 			properties: {
 				colors: {
 					description: expect.stringContaining("use compatible fallbacks"),
