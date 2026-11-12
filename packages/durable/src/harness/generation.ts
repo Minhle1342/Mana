@@ -834,7 +834,7 @@ async function classify(
 		isRetryableAssistantError(message) &&
 		policy.enabled &&
 		attempt <= policy.maxRetries;
-	const until = retry ? runtime.now() + retryDelayMs(policy, attempt) : 0;
+	const until = retry ? runtime.now() + retryDelayMs(policy, attempt, message) : 0;
 	await runtime.commit(async (tx): Promise<Next> => {
 		// Read before the first table write; only a failure uses it.
 		const failure = retry ? undefined : await prepareFailure(tx, runtime);

@@ -197,7 +197,7 @@ export const CompactionTask = defineTask<CompactionInput, CompactionCheckpoint, 
 				isRetryableAssistantError(message) &&
 				policy.enabled &&
 				attempt <= policy.maxRetries;
-			const until = retry ? runtime.now() + retryDelayMs(policy, attempt) : 0;
+			const until = retry ? runtime.now() + retryDelayMs(policy, attempt, message) : 0;
 			await runtime.commit(async (tx, current): Promise<Next> => {
 				await recordUsage(
 					tx,

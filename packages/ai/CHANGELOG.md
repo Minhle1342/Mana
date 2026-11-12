@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `retryDelayMs` waits 3000 ms for HTTP 503 and "currently experiencing high demand" errors instead of the exponential backoff, so an overloaded provider is retried sooner. `baseDelayMs` still shortens it and `maxAgentDelayMs` still caps it. `isHighDemand503Error` is exported to classify those messages.
+
 ### Fixed
 
 - Fixed Google Generative AI and Google Vertex streams throwing an unhandled `Incomplete JSON segment at the end` error when the server stream ends with trailing whitespace or keep-alive comments, or drops prematurely. The adapters now recover already-received text and completed tool calls, and retry dropped streams that fail before emitting output.

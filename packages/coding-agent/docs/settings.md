@@ -16,7 +16,7 @@ Add `"$schema": "https://pi.dev/schemas/settings.schema.json"` to `settings.json
 | `modelThinkingLevels` | object | None | Per-model startup thinking levels keyed by exact `provider/modelId`. |
 | `thinkingBudgets` | object | Built-in budgets | Token budgets for `minimal`, `low`, `medium`, and `high` thinking levels. |
 | `enabledModels` | `string[]` | All available models | Model patterns used for startup selection and model cycling. Uses the same format as `--models`. |
-| `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in the transcript. |
+| `hideThinkingBlock` | boolean | `true` | Hide thinking blocks in the transcript. |
 | `showCacheMissNotices` | boolean | `false` | Show notices for significant cache misses, successful cache warming, compaction usage, and provider recovery. |
 | `cacheWarming` | `"off" \| "streaming" \| "idle"` | `"idle"` | Keep eligible provider prompt caches warm during active runs and, with `"idle"`, for up to 30 minutes between runs. `"streaming"` warms only during active runs. Global setting only. |
 
@@ -127,7 +127,7 @@ See [Themes](themes.md) and [Terminal Setup](terminal-setup.md) for format and p
 | `websocketConnectTimeoutMs` | number \| `"disabled"` | `15000` | WebSocket connection timeout in milliseconds. Set to `0` or `"disabled"` to disable. |
 | `retry.enabled` | boolean | `true` | Enable automatic agent-level retry for transient failures. |
 | `retry.maxRetries` | number | `3` | Maximum agent-level retry attempts. |
-| `retry.baseDelayMs` | number | `2000` | Initial exponential-backoff delay in milliseconds. |
+| `retry.baseDelayMs` | number | `2000` | Initial exponential-backoff delay in milliseconds. HTTP 503 and high-demand errors retry after a fixed 3 s instead, or after this delay when it is shorter. |
 | `retry.maxAgentDelayMs` | number | `60000` | Maximum agent-level retry delay in milliseconds. |
 | `retry.provider.timeoutMs` | number | `httpIdleTimeoutMs` | Provider request timeout in milliseconds. |
 | `retry.provider.maxRetries` | number | `0` | Provider-level retry attempts. |

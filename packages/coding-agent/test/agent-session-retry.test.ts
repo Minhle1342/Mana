@@ -60,11 +60,15 @@ describe("AgentSession retry", () => {
 		maxRetries?: number;
 		maxAgentDelayMs?: number;
 		delayAssistantMessageEndMs?: number;
+		errorMessage?: string;
+		baseDelayMs?: number;
 	}) {
 		const failCount = options?.failCount ?? 1;
 		const maxRetries = options?.maxRetries ?? 3;
 		const maxAgentDelayMs = options?.maxAgentDelayMs ?? 60000;
 		const delayAssistantMessageEndMs = options?.delayAssistantMessageEndMs ?? 0;
+		const errorMessage = options?.errorMessage ?? "overloaded_error";
+		const baseDelayMs = options?.baseDelayMs ?? 1;
 		let callCount = 0;
 
 		const model = getModel("anthropic", "claude-sonnet-4-5")!;
@@ -78,7 +82,7 @@ describe("AgentSession retry", () => {
 					if (callCount <= failCount) {
 						const msg = createAssistantMessage("", {
 							stopReason: "error",
-							errorMessage: "overloaded_error",
+							errorMessage,
 						});
 						stream.push({ type: "start", partial: msg });
 						stream.push({ type: "error", reason: "error", error: msg });
@@ -97,7 +101,7 @@ describe("AgentSession retry", () => {
 		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
 		const modelRegistry = await createModelRegistry(authStorage, tempDir);
 		await authStorage.modify("anthropic", async () => ({ type: "api_key", key: "test-key" }));
-		settingsManager.applyOverrides({ retry: { enabled: true, maxRetries, baseDelayMs: 1, maxAgentDelayMs } });
+		settingsManager.applyOverrides({ retry: { enabled: true, maxRetries, baseDelayMs, maxAgentDelayMs } });
 
 		session = new AgentSession({
 			agent,
@@ -165,6 +169,36 @@ describe("AgentSession retry", () => {
 		await created.session.prompt("Test");
 
 		expect(delays).toEqual([1, 2, 4, 5]);
+	});
+
+	it("shortens retry delay to 3s for 503 high demand errors", async () => {
+		const created = await createSession({
+			failCount: 1,
+			errorMessage: "503 This model is currently experiencing high demand",
+			baseDelayMs: 60000,
+		});
+		const delays: number[] = [];
+		created.session.subscribe((event) => {
+			if (event.type === "auto_retry_start") {
+				delays.push(event.delayMs);
+				created.session.abortRetry();
+			}
+		});
+
+		await created.session.prompt("Test");
+
+		expect(delays).toEqual([3000]);
+	});
+
+	it("leaves no retry armed when an auto_retry_start listener throws", async () => {
+		const created = await createSession({ failCount: 1 });
+		created.session.subscribe((event) => {
+			if (event.type === "auto_retry_start") throw new Error("listener failed");
+		});
+
+		await created.session.prompt("Test").catch(() => {});
+
+		expect(created.session.isRetrying).toBe(false);
 	});
 
 	it("prompt waits for retry completion even when assistant message_end handling is delayed", async () => {

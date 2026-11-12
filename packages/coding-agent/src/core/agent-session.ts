@@ -3990,21 +3990,28 @@ export class AgentSession {
 			return false;
 		}
 
-		const delayMs = retryDelayMs(settings, this._retryAttempt);
+		const delayMs = retryDelayMs(settings, this._retryAttempt, message);
 
-		this._emit({
-			type: "auto_retry_start",
-			attempt: this._retryAttempt,
-			maxAttempts: settings.maxRetries,
-			delayMs,
-			errorMessage: message.errorMessage || "Unknown error",
-		});
+		this._retryAbortController = new AbortController();
+
+		try {
+			this._emit({
+				type: "auto_retry_start",
+				attempt: this._retryAttempt,
+				maxAttempts: settings.maxRetries,
+				delayMs,
+				errorMessage: message.errorMessage || "Unknown error",
+			});
+		} catch (error) {
+			// A listener that throws must not leave `isRetrying` true for the rest of the session.
+			this._retryAbortController = undefined;
+			throw error;
+		}
 
 		// Keep the failed attempt in raw history while durably omitting it from model projection.
 		this._omitRecoveryAttempt(message);
 
 		// Wait with exponential backoff (abortable)
-		this._retryAbortController = new AbortController();
 		try {
 			await sleep(delayMs, this._retryAbortController.signal);
 		} catch {

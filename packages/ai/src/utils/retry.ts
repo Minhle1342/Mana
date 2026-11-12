@@ -147,8 +147,23 @@ export interface RetryPolicy {
 }
 
 export const DEFAULT_MAX_AGENT_RETRY_DELAY_MS = 60_000;
+export const HIGH_DEMAND_503_RETRY_DELAY_MS = 3000;
 
-export function retryDelayMs(policy: Pick<RetryPolicy, "baseDelayMs" | "maxAgentDelayMs">, attempt: number): number {
+export function isHighDemand503Error(error?: string | AssistantMessage): boolean {
+	const text = !error ? undefined : typeof error === "string" ? error : error.errorMessage;
+	if (!text) return false;
+	return /(?<![a-z0-9])503(?![a-z0-9])/i.test(text) || /currently experiencing high demand/i.test(text);
+}
+
+export function retryDelayMs(
+	policy: Pick<RetryPolicy, "baseDelayMs" | "maxAgentDelayMs">,
+	attempt: number,
+	error?: string | AssistantMessage,
+): number {
+	if (isHighDemand503Error(error)) {
+		const highDemandDelay = Math.min(policy.baseDelayMs, HIGH_DEMAND_503_RETRY_DELAY_MS);
+		return Math.min(highDemandDelay, policy.maxAgentDelayMs ?? DEFAULT_MAX_AGENT_RETRY_DELAY_MS);
+	}
 	const delay = policy.baseDelayMs * 2 ** Math.max(0, attempt - 1);
 	const safeDelay = Number.isSafeInteger(delay) ? delay : Number.MAX_SAFE_INTEGER;
 	return Math.min(safeDelay, policy.maxAgentDelayMs ?? DEFAULT_MAX_AGENT_RETRY_DELAY_MS);
@@ -244,7 +259,7 @@ export async function retryAssistantCall(
 
 		attempt++;
 		lastRetry = { attempt, errorMessage: response.errorMessage || "Unknown error" };
-		const delayMs = retryDelayMs(policy!, attempt);
+		const delayMs = retryDelayMs(policy!, attempt, response);
 		await callbacks?.onRetryScheduled?.(attempt, maxAttempts, delayMs, lastRetry.errorMessage);
 
 		// Normalize aborts during retry backoff to the same AssistantMessage shape as

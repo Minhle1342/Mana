@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { fauxAssistantMessage } from "../src/providers/faux.ts";
-import { isRetryableAssistantError, type RetryPolicy, retryAssistantCall, retryDelayMs } from "../src/utils/retry.ts";
+import {
+	isHighDemand503Error,
+	isRetryableAssistantError,
+	type RetryPolicy,
+	retryAssistantCall,
+	retryDelayMs,
+} from "../src/utils/retry.ts";
 
 const openAIExplicitRetryMessage =
 	"An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID req_******** in your message.";
@@ -175,12 +181,47 @@ describe("provider retry classification", () => {
 	});
 });
 
+describe("isHighDemand503Error", () => {
+	it.each([
+		"503 This model is currently experiencing high demand",
+		"[503 Service Unavailable] This model is currently experiencing high demand. Please try again later.",
+		"This model is currently experiencing high demand",
+		"503 Service Unavailable",
+		"The system is currently experiencing high demand and cannot process your request.",
+		"Google API error (503): High demand",
+	])("matches 503 and high-demand errors: %s", (errorMessage) => {
+		expect(isHighDemand503Error(errorMessage)).toBe(true);
+		expect(isHighDemand503Error(fauxAssistantMessage("", { stopReason: "error", errorMessage }))).toBe(true);
+	});
+
+	it.each([
+		"429 quota exceeded",
+		"429 rate limit exceeded",
+		"500 Internal Server Error",
+		"502 Bad Gateway",
+		'401 {"request_id":"req_011CU503xyz"}',
+		"",
+	])("does not match unrelated errors: %s", (errorMessage) => {
+		expect(isHighDemand503Error(errorMessage)).toBe(false);
+		expect(isHighDemand503Error(fauxAssistantMessage("", { stopReason: "error", errorMessage }))).toBe(false);
+	});
+});
+
 describe("retryDelayMs", () => {
 	it("caps agent retry delay", () => {
 		// Regression for #8826.
 		expect(retryDelayMs({ baseDelayMs: 2000 }, 6)).toBe(60000);
 		expect(retryDelayMs({ baseDelayMs: 2000, maxAgentDelayMs: 5000 }, 5)).toBe(5000);
 		expect(retryDelayMs({ baseDelayMs: 2000, maxAgentDelayMs: 0 }, 5)).toBe(0);
+	});
+
+	it("shortens retry delay to 3s for 503 high demand errors", () => {
+		const highDemandMessage = "503 This model is currently experiencing high demand";
+		expect(retryDelayMs({ baseDelayMs: 60000 }, 1, highDemandMessage)).toBe(3000);
+		expect(retryDelayMs({ baseDelayMs: 60000 }, 2, highDemandMessage)).toBe(3000);
+		expect(retryDelayMs({ baseDelayMs: 60000 }, 5, highDemandMessage)).toBe(3000);
+		expect(retryDelayMs({ baseDelayMs: 1 }, 1, highDemandMessage)).toBe(1);
+		expect(retryDelayMs({ baseDelayMs: 60000, maxAgentDelayMs: 1000 }, 1, highDemandMessage)).toBe(1000);
 	});
 });
 
@@ -243,6 +284,37 @@ describe("retryAssistantCall", () => {
 		await retryAssistantCall(produce, policy, undefined, { onRetryScheduled });
 
 		expect(onRetryScheduled.mock.calls.map((call) => call[2])).toEqual([10, 15, 15, 15]);
+	});
+
+	it("uses 3s retry delay for 503 high demand errors", async () => {
+		vi.useFakeTimers();
+		try {
+			let n = 0;
+			const policy: RetryPolicy = { enabled: true, maxRetries: 2, baseDelayMs: 60_000 };
+			const produce = vi.fn(async () => {
+				n++;
+				return n < 2
+					? fauxAssistantMessage("", {
+							stopReason: "error",
+							errorMessage: "503 This model is currently experiencing high demand",
+						})
+					: fauxAssistantMessage("recovered");
+			});
+			const onRetryScheduled = vi.fn();
+
+			const promise = retryAssistantCall(produce, policy, undefined, { onRetryScheduled });
+			await vi.advanceTimersByTimeAsync(3000);
+			await promise;
+
+			expect(onRetryScheduled).toHaveBeenCalledWith(
+				1,
+				2,
+				3000,
+				"503 This model is currently experiencing high demand",
+			);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("stops retrying once a call succeeds", async () => {
