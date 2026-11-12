@@ -136,6 +136,15 @@ export type {
 } from "./harness/types.ts";
 export { UsageDoc, type UsageState } from "./harness/usage.ts";
 export type { ConversationView, ConversationWindow } from "./harness/view.ts";
+export { createGroup } from "./orchestration/group.ts";
+export type {
+	AgentGroup,
+	AgentGroupRequest,
+	AgentRequest,
+	AgentResult,
+	AgentSlot,
+	AgentStatus,
+} from "./orchestration/types.ts";
 export { createSession } from "./session/session.ts";
 export { MemoryStorage } from "./storage/memory.ts";
 export { defineTask } from "./tasks.ts";
