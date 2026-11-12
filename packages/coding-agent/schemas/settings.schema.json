@@ -172,12 +172,12 @@
         },
         "maxRetries": {
           "type": "number",
-          "default": 3
+          "default": 10
         },
         "baseDelayMs": {
           "type": "number",
-          "description": "Exponential backoff base delay in milliseconds: 2s, 4s, 8s.",
-          "default": 2000
+          "description": "Exponential backoff base delay in milliseconds: 2s, 4s, 8s. 503 and high-demand errors retry after 3s, or after this delay when it is shorter.",
+          "default": 60000
         },
         "maxAgentDelayMs": {
           "type": "number",
