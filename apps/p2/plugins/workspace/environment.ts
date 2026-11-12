@@ -993,8 +993,7 @@ export class Workspace {
 	}
 
 	private async createSnapshot(message: string, context: Context): Promise<string> {
-		const isGit = await this.git(["rev-parse", "--is-inside-work-tree"], 1024, context);
-		if (isGit.exitCode !== 0) throw new Error("Not inside a git worktree");
+		if (!(await this.inGitWorktree(context))) throw new Error("Not inside a git worktree");
 		const root = await this.canonicalRoot(context);
 		const tempIndex = `${root === "/" ? "" : root}/pi_tmp_idx_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 		const extraEnv = { GIT_INDEX_FILE: tempIndex };
@@ -1031,7 +1030,14 @@ export class Workspace {
 		}
 	}
 
-	async createCheckpoint(entryId: number, context: Context): Promise<string> {
+	/** Whether the workspace sits inside a git worktree; checkpoints and their diffs need one. */
+	private async inGitWorktree(context: Context): Promise<boolean> {
+		const run = await this.git(["rev-parse", "--is-inside-work-tree"], 1024, context);
+		return run.exitCode === 0;
+	}
+
+	async createCheckpoint(entryId: number, context: Context): Promise<string | undefined> {
+		if (!(await this.inGitWorktree(context))) return undefined;
 		const ref = await this.createSnapshot(`checkpoint_${entryId}`, context);
 		this.checkpoints.set(entryId, ref);
 		const run = await this.git(["update-ref", `${this.checkpointRefNamespace()}/${entryId}`, ref], 1024, context);
@@ -1057,8 +1063,7 @@ export class Workspace {
 		context: Context,
 	): Promise<{ hasCheckpoint: boolean; added: number; deleted: number }> {
 		const entryId = typeof target === "number" ? target : target.entryId;
-		const isGit = await this.git(["rev-parse", "--is-inside-work-tree"], 1024, context);
-		if (isGit.exitCode !== 0) return { hasCheckpoint: false, added: 0, deleted: 0 };
+		if (!(await this.inGitWorktree(context))) return { hasCheckpoint: false, added: 0, deleted: 0 };
 		const checkpointRef = await this.findCheckpoint(entryId, context);
 		if (!checkpointRef) return { hasCheckpoint: false, added: 0, deleted: 0 };
 

@@ -233,7 +233,7 @@ describe("undo and revert a user turn in the browser", { skip: !browserTests }, 
 		await browser.evaluate(
 			`[...document.querySelectorAll('.user')].find(e=>e.textContent.includes('first')).querySelector('.bubble').click()`,
 		);
-		await browser.wait(`document.querySelector('.sheet.undo-modal')`);
+		await browser.wait(`document.querySelector('.sheet.undo-modal .diff-badge.add')`);
 		assert.equal(await browser.evaluate<boolean>(`!!document.querySelector('.diff-badge.add')`), true);
 		assert.equal(await browser.evaluate<boolean>(`!!document.querySelector('.diff-badge.del')`), true);
 

@@ -181,3 +181,21 @@ test("checkpoint survives re-read from git ref (simulated restart)", async () =>
 		await rm(directory, { recursive: true, force: true });
 	}
 });
+
+test("non-git workspace: createCheckpoint records nothing instead of failing", async () => {
+	const directory = await realpath(await mkdtemp(join(tmpdir(), "p2-checkpoint-nogit-")));
+	try {
+		await writeFile(join(directory, "file.txt"), "hello\n");
+		const env = new NodeExecutionEnv({ cwd: directory });
+		const workspace = new Workspace(env, [], 1);
+
+		assert.equal(await workspace.createCheckpoint(1, context), undefined);
+		assert.deepEqual(await workspace.getCheckpointDiff({ entryId: 1 }, context), {
+			hasCheckpoint: false,
+			added: 0,
+			deleted: 0,
+		});
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});

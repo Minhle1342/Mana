@@ -134,6 +134,7 @@ export default defineFacet((host) => {
 			const configured = self.registry(ConversationConfigured);
 			// Methods that start or end work push the worker's status before they answer (the sidebar's working dot).
 			const status = self.get(StatusReport, {});
+			const workspace = self.get(WorkspaceBackend, { conversation: id });
 			const models = () => config.value.get("default")?.models();
 			const live = self.state(Live);
 			/** The view's model from the catalog: name, window and levels, never provider configuration. */
@@ -254,10 +255,6 @@ export default defineFacet((host) => {
 						text,
 						attachments: (files ?? []).map(({ id, name }) => ({ id, name })),
 					};
-					const tail = (await current.entries({}, 1, undefined, ctx)).items[0]?.id ?? 0;
-					await self
-						.get(WorkspaceBackend, { conversation: current.id })
-						.createCheckpoint({ entryId: tail + 1 }, ctx);
 					const submission = await current.submit(
 						{
 							type: "input",
@@ -272,6 +269,11 @@ export default defineFacet((host) => {
 						},
 						ctx,
 					);
+					const record = await submission.status(ctx);
+					const entryId = "entry" in record && typeof record.entry === "number" ? record.entry : undefined;
+					if (entryId !== undefined) {
+						await workspace.createCheckpoint({ entryId }, ctx);
+					}
 					await status.push(ctx);
 					return { submissionId: submission.id };
 				},
