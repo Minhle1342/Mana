@@ -226,6 +226,61 @@ describe("subagents (fake provider)", () => {
 			await restarted.close();
 		}
 	});
+
+	// Last: the group adds children to the session, which the tests above count.
+});
+
+// A group of its own: the tests above count the session's children.
+describe("a group of subagents (fake provider)", () => {
+	let fixture: Fixture;
+	let children: RefIn<typeof Subagents, "reader">;
+	let session: string;
+
+	before(async () => {
+		fixture = await startFixture();
+		const owner = fixture.browser();
+		session = (
+			await (await holdIn(owner, Sessions, {}, "owner")).create({ cwd: fixture.workspace }, BACKGROUND_CONTEXT)
+		).id;
+		children = await holdIn(owner, Subagents, {}, "reader");
+	});
+	after(async () => {
+		await fixture?.close();
+	});
+
+	it("spawns a group of agents in one call, each in its own conversation", async () => {
+		const owner = fixture.browser();
+		const chat = await holdIn(owner, Chat, { session, conversation: 1 }, "participant");
+		await chat.send(
+			{
+				text: 'subagent {"action":"spawnGroup","agents":[{"name":"reader","message":"hello reader"},{"name":"scout","message":"hello scout"}]}',
+				requestId: "group",
+			},
+			BACKGROUND_CONTEXT,
+		);
+		const view = await until(chat.view, (value) => texts(value).some((text) => text.includes("Echo: hello reader")));
+		const spawned = result(view, "spawnGroup");
+		assert.equal(spawned?.isError, false);
+		const listed = await until(children.children, (value) =>
+			value?.[session]?.some((each) => each.name === "reader"),
+		);
+		const group = listed![session]!;
+		assert.equal(group.length, 2);
+		assert.notEqual(group[0]!.conversationId, group[1]!.conversationId);
+		// Both agents work at once and report their own answers.
+		const answered = await until(chat.view, (value) =>
+			texts(value).some((text) => text.includes("Echo: hello scout")),
+		);
+		assert.ok(texts(answered).some((text) => text.includes("Echo: hello reader")));
+		assert.ok(texts(answered).some((text) => text.includes("Echo: hello scout")));
+		// The same shape as a single-agent spawn: one creation path.
+		const single = await holdIn(owner, Chat, { session, conversation: 1 }, "participant");
+		await single.send({ text: "subagent", requestId: "spawn-single" }, BACKGROUND_CONTEXT);
+		const withSingle = await until(children.children, (value) => value?.[session]?.length === 3);
+		const spawned1 = withSingle![session]!.find((each) => each.name === "helper")!;
+		const group1 = withSingle![session]!.find((each) => each.name === "reader")!;
+		assert.deepEqual(Object.keys(group1).sort(), Object.keys(spawned1).sort());
+	});
 });
 
 // Pi Mobile 24e3fccdd: spawn takes a cwd (e.g. a git worktree the main agent created first).

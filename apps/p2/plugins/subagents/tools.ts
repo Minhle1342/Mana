@@ -11,6 +11,7 @@ import {
 	type ConversationId,
 	type Cursor,
 	configure,
+	createGroup,
 	type DocumentReader,
 	defineExtension,
 	defineTask,
@@ -21,6 +22,7 @@ import {
 	ROOT_CONVERSATION_ID,
 	type SettledSubmissionRecord,
 	type Submission,
+	type TaskId,
 	type ToolExecutionApi,
 	type Tx,
 } from "@earendil-works/pi-durable";
@@ -233,6 +235,57 @@ type SubagentDetails = {
 	env?: string;
 };
 
+/** The instructions a subagent runs with: who it is, what it answers, and how it reaches the others. */
+function subagentInstructions(name: string): string {
+	return `You are the subagent "${name}", working for a main agent. Do the requested work and answer concisely; your final answer is reported back to it. With the team tool you can ask the main agent a question or tell it something while you keep working, and message the other subagents.`;
+}
+
+/** A subagent to create: its name, the message it starts with, and the agent state it runs with. */
+type ChildRequest = {
+	readonly name: string;
+	readonly message: string;
+	readonly change: { readonly model?: ModelRef; readonly thinkingLevel?: ModelThinkingLevel };
+	readonly tools: ToolChoice;
+	readonly location?: Location;
+};
+
+/**
+ * Creates the group's conversations and the registry entries for them, in the caller's commit. The conversations are
+ * owned by the call's anchor, and each agent gets the profile its request names. This is the one path a subagent is
+ * created by, whether the call makes one or several.
+ */
+async function spawnChildren(
+	tx: Tx,
+	options: { readonly anchor: TaskId; readonly requests: readonly ChildRequest[] },
+): Promise<readonly { name: string; conversationId: ConversationId }[]> {
+	const state = await tx.doc(Subagents, ROOT_CONVERSATION_ID);
+	const group = await createGroup(tx, {
+		ownerTaskId: options.anchor,
+		agents: options.requests.map((request) => ({
+			name: request.name,
+			task: request.message,
+			agent: {
+				...request.change,
+				...agentTools(request.tools),
+				...(request.location ? { cwd: request.location.cwd } : {}),
+				instructions: subagentInstructions(request.name),
+			},
+		})),
+	});
+	for (const [index, slot] of group.agents.entries()) {
+		const request = options.requests[index]!;
+		state.agents[request.name] = {
+			conversationId: slot.conversationId,
+			model: `${request.change.model?.provider}/${request.change.model?.modelId}`,
+			thinkingLevel: request.change.thinkingLevel ?? "off",
+			tools: request.tools.chosen,
+			...(request.location ? { location: request.location } : {}),
+			reported: [],
+		};
+	}
+	return group.agents;
+}
+
 /** A subagent's own location as the tool's details carry it. */
 const locationDetails = (location: Location | undefined): Pick<SubagentDetails, "cwd" | "env"> =>
 	location === undefined ? {} : { cwd: location.cwd, ...(location.env === null ? {} : { env: location.env }) };
@@ -382,6 +435,9 @@ export function createSubagentExtension(
 			"Each subagent is its own conversation with its own memory, working in your cwd unless spawned with its own.",
 			"Actions:",
 			"- spawn (name, message; optional model, thinkingLevel, tools, env, cwd): start a subagent and send its first message.",
+			"- spawnGroup (agents: [{name, message; optional model, thinkingLevel, tools}]): start several subagents at once,",
+			"  each in its own conversation, all working at the same time where you work. Their answers are reported back",
+			"  to you as they arrive.",
 			"  Without env and cwd it works where you work and follows the session when it moves. With them it gets its own",
 			"  location, which stays when the session moves: cwd is an existing directory its tools run in and the user's workspace",
 			"  view shows, e.g. a git worktree you created first (relative to your cwd on your environment, to the home on another);",
@@ -409,6 +465,7 @@ export function createSubagentExtension(
 			{
 				action: union([
 					literal("spawn"),
+					literal("spawnGroup"),
 					literal("send"),
 					literal("configure"),
 					literal("stop"),
@@ -420,6 +477,17 @@ export function createSubagentExtension(
 				]),
 				name: opt(str()),
 				message: opt(str()),
+				agents: opt(
+					arr(
+						obj({
+							name: str(),
+							message: str(),
+							model: opt(str()),
+							thinkingLevel: opt(str()),
+							tools: opt(arr(str())),
+						}),
+					),
+				),
 				followUp: opt(bool()),
 				model: opt(str()),
 				thinkingLevel: opt(str()),
@@ -464,6 +532,55 @@ export function createSubagentExtension(
 				const archived = name === undefined ? all.length - listed.length : 0;
 				if (archived) lines.push(`${archived} archived (status with a name shows one).`);
 				return reply(lines.length ? lines.join("\n") : "No subagents.");
+			}
+			if (action === "spawnGroup") {
+				const requests = args.agents ?? [];
+				if (requests.length === 0) return reply("spawnGroup needs agents.", {}, true);
+				const origin = await originOf(api, context);
+				const resolved: ChildRequest[] = [];
+				for (const request of requests) {
+					if (Object.hasOwn(registry.agents, request.name))
+						return reply(`${request.name} already exists; use send.`, {}, true);
+					const choice = await resolveChoice(
+						models,
+						api,
+						access(),
+						{ model: request.model, thinkingLevel: request.thinkingLevel, tools: request.tools },
+						undefined,
+						"subagent",
+						context,
+					);
+					if (typeof choice === "string") return reply(choice, {}, true);
+					resolved.push({
+						name: request.name,
+						message: request.message,
+						change: { model: choice.model, thinkingLevel: choice.thinkingLevel },
+						tools: choice,
+					});
+				}
+				const started = await api.commit(async (tx) => {
+					const background = { ownership: { kind: "conversation" }, background: true } as const;
+					// One anchor owns the whole group; each agent gets its own conversation.
+					const anchor = await tx.createTask(Anchor, null, background);
+					const group = await spawnChildren(tx, { anchor, requests: resolved });
+					const state = await tx.doc(Subagents, ROOT_CONVERSATION_ID);
+					const names: string[] = [];
+					for (const [index, request] of resolved.entries()) {
+						const input = {
+							name: request.name,
+							conversationId: group[index]!.conversationId,
+							parent: api.conversationId,
+							message: request.message,
+							followUp: false,
+							...(origin === "owner" ? { origin } : {}),
+						};
+						const reporter = await tx.createTask(Reporter, input, background);
+						state.reporters[`${api.taskId}:${request.name}`] = reporter;
+						names.push(request.name);
+					}
+					return names;
+				}, context);
+				return reply(`Started ${started.join(", ")}.`);
 			}
 			if (name === undefined || !name.trim()) return reply(`${action} needs a name.`, {}, true);
 			const agent = Object.hasOwn(registry.agents, name) ? registry.agents[name] : undefined;
@@ -584,21 +701,10 @@ export function createSubagentExtension(
 				if (action === "spawn") {
 					if (Object.hasOwn(state.agents, name)) return `${name} already exists; use send.`;
 					const anchor = await tx.createTask(Anchor, null, background);
-					const child = await tx.createConversation({ ownership: { kind: "task", taskId: anchor } });
-					await configure(tx, child.id, {
-						...change,
-						...agentTools(tools),
-						...(location ? { cwd: location.cwd } : {}),
-						instructions: `You are the subagent "${name}", working for a main agent. Do the requested work and answer concisely; your final answer is reported back to it. With the team tool you can ask the main agent a question or tell it something while you keep working, and message the other subagents.`,
+					await spawnChildren(tx, {
+						anchor,
+						requests: [{ name, message: message ?? "", change, tools, ...(location ? { location } : {}) }],
 					});
-					state.agents[name] = {
-						conversationId: child.id,
-						model: `${change.model?.provider}/${change.model?.modelId}`,
-						thinkingLevel: change.thinkingLevel ?? "off",
-						tools: tools.chosen,
-						...(location ? { location } : {}),
-						reported: [],
-					};
 				}
 				const target = state.agents[name];
 				if (!target) return `No subagent named ${name}.`;
