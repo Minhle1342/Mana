@@ -46,6 +46,18 @@ test("the status line counts the working and the answered subagents", () => {
 	// An archived subagent and a one-shot agent are not the group.
 	assert.equal(subagentStatus([child({ name: "old", conversationId: 5, archived: true })]), undefined);
 	assert.equal(subagentStatus([child({ name: "script", conversationId: 6, kind: "agent" })]), undefined);
+	// A child the worker reported no state for (an older worker, a restart) is not counted: its state is unknown.
+	assert.equal(subagentStatus([child({ name: "unknown", conversationId: 7 })]), undefined);
+	assert.deepEqual(
+		subagentStatus([
+			child({ name: "unknown", conversationId: 7 }),
+			child({ name: "reader", conversationId: 8, state: "answered" }),
+		]),
+		{
+			text: "1/1 subagent(s) done",
+			done: true,
+		},
+	);
 });
 
 test("the line renders the group's status, green when every agent answered", () => {

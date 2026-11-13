@@ -496,14 +496,20 @@ describe("older contract versions against the current server (fake provider)", (
 	});
 
 	it("binds Subagents v2: the children without their state", async () => {
+		// A child, so the comparison is not empty. The session's current main conversation: the tree test moved it.
+		const catalog = await boundIn(owner, Sessions, {}, "owner");
+		const main = catalog.sessions.value.find((row) => row.id === session.id)?.main ?? 1;
+		const chat = await holdIn(owner, Chat, { session: session.id, conversation: main }, "participant");
+		await chat.send({ text: "subagent", requestId: "spawn" }, BACKGROUND_CONTEXT);
+		await until(chat.view, (view) => JSON.stringify(view?.entries ?? []).includes("Echo: hello helper"));
 		const current = await boundIn(owner, Subagents, {}, "reader");
-		const rows = await until(current.children, (value) => value !== undefined);
-		assert.ok(rows);
+		const children = await until(current.children, (value) => (value?.[session.id]?.length ?? 0) > 0);
+		assert.ok(children?.[session.id]?.[0]?.state, "the current reader sees the child's state");
 		current.release();
 		const ref = await boundIn(owner, SubagentsV2, {}, "reader");
-		const children = await until(ref.children, (value) => value !== undefined);
-		const old = children?.[session.id] ?? [];
-		for (const child of old) assert.equal("state" in child, false);
+		const old = await until(ref.children, (value) => (value?.[session.id]?.length ?? 0) > 0);
+		for (const child of old?.[session.id] ?? []) assert.equal("state" in child, false);
 		ref.release();
+		chat.release();
 	});
 });

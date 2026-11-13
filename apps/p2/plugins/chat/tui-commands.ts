@@ -13,6 +13,8 @@ export const CHAT_COMMANDS: Record<string, TuiCommand> = {
 		title: "List the session's subagents",
 		category: "Chat",
 		when: "chat && !overlay",
+		// The terminal has no clickable status row: the key opens the selector the row stands for.
+		keys: "ctrl+y",
 		slash: { name: "agents" },
 		run: (ctx) => chat(ctx)?.openAgents(),
 	},

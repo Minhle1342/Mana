@@ -44,6 +44,9 @@ import {
 
 const SUBAGENT_EXTENSION = "subagent-tools";
 
+/** How many agents one group may hold. */
+const MAX_GROUP_AGENTS = 8;
+
 // Owns the subagent conversation. Background and immediately terminal, so the
 // main agent's Stop and idle waits do not reach the subagent; abort({background})
 // still does.
@@ -256,10 +259,11 @@ type ChildRequest = {
  */
 async function spawnChildren(
 	tx: Tx,
-	options: { readonly anchor: TaskId; readonly requests: readonly ChildRequest[] },
+	options: { readonly anchor: TaskId; readonly requests: readonly ChildRequest[]; readonly parent?: ConversationId },
 ): Promise<readonly { name: string; conversationId: ConversationId }[]> {
 	const state = await tx.doc(Subagents, ROOT_CONVERSATION_ID);
 	const group = await createGroup(tx, {
+		groupId: `${options.anchor}`,
 		ownerTaskId: options.anchor,
 		agents: options.requests.map((request) => ({
 			name: request.name,
@@ -280,6 +284,7 @@ async function spawnChildren(
 			thinkingLevel: request.change.thinkingLevel ?? "off",
 			tools: request.tools.chosen,
 			...(request.location ? { location: request.location } : {}),
+			...(options.parent === undefined ? {} : { parent: options.parent }),
 			reported: [],
 		};
 	}
@@ -536,9 +541,15 @@ export function createSubagentExtension(
 			if (action === "spawnGroup") {
 				const requests = args.agents ?? [];
 				if (requests.length === 0) return reply("spawnGroup needs agents.", {}, true);
+				if (requests.length > MAX_GROUP_AGENTS)
+					return reply(`A group takes at most ${MAX_GROUP_AGENTS} agents.`, {}, true);
 				const origin = await originOf(api, context);
 				const resolved: ChildRequest[] = [];
+				const names = new Set<string>();
 				for (const request of requests) {
+					// One name per agent: two agents of one name would overwrite each other in the registry.
+					if (names.has(request.name)) return reply(`Two agents are named ${request.name}.`, {}, true);
+					names.add(request.name);
 					if (Object.hasOwn(registry.agents, request.name))
 						return reply(`${request.name} already exists; use send.`, {}, true);
 					const choice = await resolveChoice(
@@ -558,12 +569,17 @@ export function createSubagentExtension(
 						tools: choice,
 					});
 				}
-				const started = await api.commit(async (tx) => {
+				const started: string | string[] = await api.commit(async (tx) => {
 					const background = { ownership: { kind: "conversation" }, background: true } as const;
+					const state = await tx.doc(Subagents, ROOT_CONVERSATION_ID);
+					// The registry may have changed since the request: a name taken now is refused now.
+					for (const request of resolved) {
+						if (Object.hasOwn(state.agents, request.name)) return `${request.name} already exists; use send.`;
+					}
 					// One anchor owns the whole group; each agent gets its own conversation.
 					const anchor = await tx.createTask(Anchor, null, background);
-					const group = await spawnChildren(tx, { anchor, requests: resolved });
-					const state = await tx.doc(Subagents, ROOT_CONVERSATION_ID);
+					const group = await spawnChildren(tx, { anchor, requests: resolved, parent: api.conversationId });
+					const registry = await tx.doc(Subagents, ROOT_CONVERSATION_ID);
 					const names: string[] = [];
 					for (const [index, request] of resolved.entries()) {
 						const input = {
@@ -575,11 +591,12 @@ export function createSubagentExtension(
 							...(origin === "owner" ? { origin } : {}),
 						};
 						const reporter = await tx.createTask(Reporter, input, background);
-						state.reporters[`${api.taskId}:${request.name}`] = reporter;
+						registry.reporters[`${api.taskId}:${request.name}`] = reporter;
 						names.push(request.name);
 					}
 					return names;
 				}, context);
+				if (typeof started === "string") return reply(started, {}, true);
 				return reply(`Started ${started.join(", ")}.`);
 			}
 			if (name === undefined || !name.trim()) return reply(`${action} needs a name.`, {}, true);

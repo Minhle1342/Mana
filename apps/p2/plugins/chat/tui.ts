@@ -291,8 +291,8 @@ export class ChatSurface implements TuiSurface, ChatSurfaceApi {
 			{ component: this.pending, shrink: 1, minSize: 0 },
 			{ component: this.status, shrink: 1, minSize: 0 },
 			{ component: this.input, shrink: 1, minSize: 1 },
-			{ component: this.chips, shrink: 1, minSize: 0 },
 			{ component: this.subagentLine, shrink: 1, minSize: 0 },
+			{ component: this.chips, shrink: 1, minSize: 0 },
 		]);
 		// The session's subagents: the group the status line shows and the selector lists.
 		this.subagents = new TuiScope(runtime);
@@ -915,7 +915,8 @@ export class ChatSurface implements TuiSurface, ChatSurfaceApi {
 			"subagents",
 			new ListOverlay(runtime.ctx, {
 				title: "Subagents",
-				rows: () => rows,
+				// The rows follow the children: the group changes while the selector is open.
+				rows: () => subagentRows(this.children[session]),
 				onSelect: (row) => {
 					handle.close();
 					runtime.navigate("chat", session, Number(row.key));
@@ -1185,6 +1186,7 @@ export class ChatSurface implements TuiSurface, ChatSurfaceApi {
 		this.shellView?.component.dispose();
 		this.transcript.dispose();
 		this.sessions.dispose();
+		this.subagents.dispose();
 		this.tree?.scope.dispose();
 		this.scope?.dispose();
 	}

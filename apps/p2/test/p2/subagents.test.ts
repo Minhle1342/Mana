@@ -248,6 +248,27 @@ describe("a group of subagents (fake provider)", () => {
 		await fixture?.close();
 	});
 
+	it("refuses a group with two agents of the same name", async () => {
+		const owner = fixture.browser();
+		const chat = await holdIn(owner, Chat, { session, conversation: 1 }, "participant");
+		await chat.send(
+			{
+				text: 'subagent {"action":"spawnGroup","agents":[{"name":"twin","message":"one"},{"name":"twin","message":"two"}]}',
+				requestId: "group-duplicate",
+			},
+			BACKGROUND_CONTEXT,
+		);
+		const view = await until(chat.view, (value) => result(value, "spawnGroup") !== undefined);
+		const spawned = result(view, "spawnGroup");
+		assert.equal(spawned?.isError, true);
+		const listed = await until(children.children, (value) => value !== undefined);
+		assert.equal(
+			(listed?.[session] ?? []).filter((each) => each.name === "twin").length,
+			0,
+			"a refused group creates no child",
+		);
+	});
+
 	it("spawns a group of agents in one call, each in its own conversation", async () => {
 		const owner = fixture.browser();
 		const chat = await holdIn(owner, Chat, { session, conversation: 1 }, "participant");
@@ -281,13 +302,27 @@ describe("a group of subagents (fake provider)", () => {
 			reported![session]!.map((each) => each.state),
 			["answered", "answered"],
 		);
-		// The same shape as a single-agent spawn: one creation path.
+		// The same shape as a single-agent spawn: one creation path, so the fields agree. The same request
+		// (the same message and tools) on both paths, so the comparison means something.
 		const single = await holdIn(owner, Chat, { session, conversation: 1 }, "participant");
-		await single.send({ text: "subagent", requestId: "spawn-single" }, BACKGROUND_CONTEXT);
-		const withSingle = await until(children.children, (value) => value?.[session]?.length === 3);
-		const spawned1 = withSingle![session]!.find((each) => each.name === "helper")!;
-		const group1 = withSingle![session]!.find((each) => each.name === "reader")!;
+		await single.send({ text: "subagent-second", requestId: "spawn-single" }, BACKGROUND_CONTEXT);
+		await single.send(
+			{
+				text: 'subagent {"action":"spawnGroup","agents":[{"name":"twin","message":"hello second","tools":["read"]}]}',
+				requestId: "spawn-twin",
+			},
+			BACKGROUND_CONTEXT,
+		);
+		const withBoth = await until(children.children, (value) => value?.[session]?.length === 4);
+		const spawned1 = withBoth![session]!.find((each) => each.name === "second")!;
+		const group1 = withBoth![session]!.find((each) => each.name === "twin")!;
 		assert.deepEqual(Object.keys(group1).sort(), Object.keys(spawned1).sort());
+		assert.equal(group1.model, spawned1.model);
+		assert.equal(group1.thinkingLevel, spawned1.thinkingLevel);
+		assert.deepEqual(group1.tools, spawned1.tools);
+		assert.deepEqual(group1.location, spawned1.location);
+		assert.equal(group1.kind, spawned1.kind);
+		assert.equal(group1.archived, spawned1.archived);
 	});
 });
 

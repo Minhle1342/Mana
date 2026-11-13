@@ -34,7 +34,7 @@ import {
 	workerOf,
 } from "@p2/app/v1/worker";
 import { type Child, SubagentControl, Subagents } from "./contract.ts";
-import { calledByModel, choosableTools, Subagents as Registry } from "./contract.worker.ts";
+import { calledByModel, childState, choosableTools, Subagents as Registry } from "./contract.worker.ts";
 import {
 	createSubagentExtension,
 	enableScriptTools,
@@ -72,10 +72,11 @@ async function stateOf(
 	latest: EntryRecord | undefined,
 	ctx: Ctx,
 ): Promise<Child["state"]> {
-	if ((await durable.snapshot(LiveDoc, conversationId, ctx))?.run !== undefined) return "working";
-	const message = latest?.model?.[0];
-	if (message?.role !== "assistant") return "idle";
-	return message.stopReason === "error" || message.stopReason === "aborted" ? "idle" : "answered";
+	// Only a finished answer counts: a run stopped mid-tool left a tool call behind.
+	return childState({
+		running: (await durable.snapshot(LiveDoc, conversationId, ctx))?.run !== undefined,
+		latest,
+	});
 }
 
 /** The session's subagents and one-shot agents as the server's index lists them. */

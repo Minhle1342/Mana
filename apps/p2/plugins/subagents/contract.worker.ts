@@ -2,14 +2,16 @@
 // plugins read: one-shot agents, search, PowerShell), the tool choices subagents and one-shot agents resolve alike
 // from their caller's tools, and giving a subagent its own location (a granted `location_move`).
 
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, type Models } from "@earendil-works/pi-ai/models";
 import {
 	type Agent,
+	AssistantEntry,
 	type ConversationId,
 	configure,
 	defineDoc,
 	type EntryId,
+	type EntryRecord,
 	type ModelRef,
 	ROOT_CONVERSATION_ID,
 	type TaskId,
@@ -21,6 +23,34 @@ import type { Context, Location } from "@p2/app/v1";
 import type { P2Tool } from "@p2/app/v1/worker";
 
 export const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/** What a subagent is doing. */
+export type ChildState = "working" | "answered" | "idle";
+
+/** The text of a message. */
+export function textOf(
+	message: { readonly content: string | readonly { readonly type: string; readonly text?: string }[] } | undefined,
+): string {
+	if (message === undefined) return "";
+	if (typeof message.content === "string") return message.content;
+	return message.content.flatMap((part) => (part.type === "text" ? [part.text ?? ""] : [])).join("");
+}
+
+/**
+ * Whether an entry is an agent's answer: an assistant message that ended its turn with text. A run that was stopped
+ * mid-tool leaves a tool call behind, which is not an answer.
+ */
+export function isAnswer(entry: EntryRecord | undefined): boolean {
+	const message =
+		entry !== undefined && AssistantEntry.is(entry) ? (entry.model?.[0] as AssistantMessage | undefined) : undefined;
+	return message?.stopReason === "stop" && textOf(message).trim() !== "";
+}
+
+/** What a subagent is doing: working (it has a run), answered (it produced an answer), or idle. */
+export function childState(input: { readonly running: boolean; readonly latest: EntryRecord | undefined }): ChildState {
+	if (input.running) return "working";
+	return isAnswer(input.latest) ? "answered" : "idle";
+}
 export const TEAM_TOOL = "team";
 
 export type Subagent = {

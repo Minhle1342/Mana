@@ -4,9 +4,14 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "@p2/app/v1/tui";
 import type { Child } from "../subagents/contract.ts";
 
-/** The session's subagents: the group the status line shows (no one-shot agents, no archived ones). */
+/**
+ * The session's subagents: the group the status line shows. No one-shot agents, no archived ones, and none whose
+ * state the worker did not report (an older worker, a restart): its state is unknown, not "idle".
+ */
 export function groupOf(children: readonly Child[] | undefined): Child[] {
-	return (children ?? []).filter((child) => child.kind === undefined && child.archived !== true);
+	return (children ?? []).filter(
+		(child) => child.kind === undefined && child.archived !== true && child.state !== undefined,
+	);
 }
 
 /** What the line says: how many work, or how many answered. */
