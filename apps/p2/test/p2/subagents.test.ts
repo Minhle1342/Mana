@@ -227,7 +227,7 @@ describe("subagents (fake provider)", () => {
 		}
 	});
 
-	// Last: the group adds children to the session, which the tests above count.
+	// The group's tests live in their own describe: they add children to the session, which the tests above count.
 });
 
 // A group of its own: the tests above count the session's children.
