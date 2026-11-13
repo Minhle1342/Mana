@@ -14,6 +14,7 @@ const usage = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
+/** An assistant entry with the given stop reason: the cast is here because the entry's model message is wider than the rule reads. */
 const entry = (stopReason: string): EntryRecord =>
 	({
 		id: 1 as EntryId,
