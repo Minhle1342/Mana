@@ -40,6 +40,7 @@ import {
 	stillGiven,
 	TEAM_TOOL,
 	type ToolChoice,
+	textOf,
 } from "./contract.worker.ts";
 
 const SUBAGENT_EXTENSION = "subagent-tools";
@@ -103,10 +104,6 @@ function pause(runtime: { setTimer(callback: () => void, delayMs: number): () =>
 }
 
 const undelivered = "its previous run failed before this message was delivered; send it again";
-
-function textOf(message: AssistantMessage | undefined): string {
-	return (message?.content ?? []).flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
-}
 
 /**
  * A subagent's message as an input: the structural entry readers use, and what the model reads: the sender block, then
@@ -579,7 +576,6 @@ export function createSubagentExtension(
 					// One anchor owns the whole group; each agent gets its own conversation.
 					const anchor = await tx.createTask(Anchor, null, background);
 					const group = await spawnChildren(tx, { anchor, requests: resolved, parent: api.conversationId });
-					const registry = await tx.doc(Subagents, ROOT_CONVERSATION_ID);
 					const names: string[] = [];
 					for (const [index, request] of resolved.entries()) {
 						const input = {
@@ -591,7 +587,7 @@ export function createSubagentExtension(
 							...(origin === "owner" ? { origin } : {}),
 						};
 						const reporter = await tx.createTask(Reporter, input, background);
-						registry.reporters[`${api.taskId}:${request.name}`] = reporter;
+						state.reporters[`${api.taskId}:${request.name}`] = reporter;
 						names.push(request.name);
 					}
 					return names;

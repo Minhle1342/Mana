@@ -2,7 +2,7 @@
 // plugins read: one-shot agents, search, PowerShell), the tool choices subagents and one-shot agents resolve alike
 // from their caller's tools, and giving a subagent its own location (a granted `location_move`).
 
-import type { AssistantMessage, ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, type Models } from "@earendil-works/pi-ai/models";
 import {
 	type Agent,
@@ -28,9 +28,7 @@ export const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh", "ma
 export type ChildState = "working" | "answered" | "idle";
 
 /** The text of a message. */
-export function textOf(
-	message: { readonly content: string | readonly { readonly type: string; readonly text?: string }[] } | undefined,
-): string {
+export function textOf(message: Message | undefined): string {
 	if (message === undefined) return "";
 	if (typeof message.content === "string") return message.content;
 	return message.content.flatMap((part) => (part.type === "text" ? [part.text ?? ""] : [])).join("");
@@ -51,6 +49,7 @@ export function childState(input: { readonly running: boolean; readonly latest: 
 	if (input.running) return "working";
 	return isAnswer(input.latest) ? "answered" : "idle";
 }
+
 export const TEAM_TOOL = "team";
 
 export type Subagent = {
