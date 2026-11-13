@@ -37,8 +37,8 @@ function textOf(message: Message | undefined): string {
 
 /**
  * Runs one agent of a group to its answer: it submits the agent's prompt to the group's conversation, waits for the
- * answer, and ends with that answer as its outcome. The prompt carries a request ID derived from the driver's task ID,
- * so a rerun after a crash gets the same submission back instead of a second one.
+ * answer, and ends with that answer as its outcome. The prompt carries a request ID derived from the group's ID and the
+ * agent's name, so a rerun after a crash gets the same submission back instead of a second one.
  */
 export const OrchestratedAgent = defineTask<AgentDriverInput, { phase: "run" }, string>({
 	name: "pi.orchestrated-agent",

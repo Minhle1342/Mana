@@ -8,6 +8,7 @@ import {
 	AgentDoc,
 	type AgentDriver,
 	type AgentGroup,
+	type AgentJoinHost,
 	type AgentRequest,
 	type AgentResult,
 	createDrivers,
@@ -17,6 +18,8 @@ import {
 	joinAgents,
 	MemoryStorage,
 	OrchestratedAgent,
+	ROOT_CONVERSATION_ID,
+	type SettledTask,
 	type TaskId,
 } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
@@ -76,6 +79,7 @@ describe("the orchestration layer", () => {
 			(tx) => tx.createTask(Anchor, null, { ownership: { kind: "conversation" }, background: true }),
 			context,
 		);
+		const before = await storage.scanConversations({}, 20, undefined, context);
 		const group: AgentGroup = await harness.commit(
 			(tx) =>
 				createGroup(tx, {
@@ -84,12 +88,13 @@ describe("the orchestration layer", () => {
 					agents: [
 						{ name: "reader", task: "Read the file." },
 						{ name: "scout", task: "Scout the repository." },
+						{ name: "writer", task: "Write the notes." },
 					],
 				}),
 			context,
 		);
-		expect(group.agents.map((agent) => agent.name)).toEqual(["reader", "scout"]);
-		expect(new Set(group.agents.map((agent) => agent.conversationId)).size).toBe(2);
+		expect(group.agents.map((agent) => agent.name)).toEqual(["reader", "scout", "writer"]);
+		expect(new Set(group.agents.map((agent) => agent.conversationId)).size).toBe(3);
 		for (const agent of group.agents) {
 			expect(await harness.conversation(agent.conversationId, context)).toBeDefined();
 		}
@@ -97,6 +102,9 @@ describe("the orchestration layer", () => {
 		expect(owned.items.map((record) => record.id).sort()).toEqual(
 			group.agents.map((agent) => agent.conversationId).sort(),
 		);
+		// The group created the agents' conversations and nothing else.
+		const after = await storage.scanConversations({}, 20, undefined, context);
+		expect(after.items.length - before.items.length).toBe(3);
 	});
 
 	it("gives each conversation the profile its agent asked for", async () => {
@@ -285,21 +293,26 @@ describe("the orchestration layer", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
-});
 
-describe("the orchestration layer's results", () => {
 	it("reports a faulted or orphaned driver as failed, with its reason", async () => {
-		const host = {
-			waitForTask: async (id: TaskId) =>
-				({
-					state: {
-						status: "terminal",
-						outcome:
-							id === 1
-								? { status: "faulted", error: { message: "the driver crashed" } }
-								: { status: "orphaned" },
-					},
-				}) as never,
+		// The join reads only the outcome, so a settled record with that outcome is enough.
+		const host: AgentJoinHost = {
+			waitForTask: async <R>(id: TaskId<R>): Promise<SettledTask<R>> => ({
+				id,
+				conversationId: ROOT_CONVERSATION_ID,
+				kind: "test.driver",
+				version: 1,
+				input: null,
+				background: true,
+				abortRequested: false,
+				state: {
+					status: "terminal",
+					outcome:
+						id === 1
+							? { status: "faulted", error: { message: "the driver crashed" } }
+							: { status: "orphaned", reason: "the definition is gone" },
+				},
+			}),
 		};
 		const results = await joinAgents(
 			host,
@@ -313,7 +326,7 @@ describe("the orchestration layer's results", () => {
 		);
 		expect(results.map((result) => result.status)).toEqual(["failed", "failed"]);
 		expect(results[0]?.error).toContain("the driver crashed");
-		expect(results[1]?.error).toBeTruthy();
+		expect(results[1]?.error).toContain("the definition is gone");
 	});
 
 	it("keeps a driver's answer when the group's other driver is aborted", async () => {
