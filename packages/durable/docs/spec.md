@@ -6565,9 +6565,14 @@ returns the group. The request names:
   an `AgentChange` the conversation's `pi.agent` gets (section 2.2). A field the
   profile leaves out keeps the value the conversation inherited; `null` clears
   it.
+- the **group's id**: the caller's name for it. The drivers' request IDs come
+  from it, so a caller that drives the same group twice asks each agent the
+  same question.
 - the **owner**: the task that owns the group's conversations. Every
-  conversation of the group is owned by it, so aborting it reaches the whole
-  group (section 5.5) and the group cannot outlive it.
+  conversation of the group is owned by it, so aborting it reaches the group's
+  live work (section 5.5). The group does not outlive it in the sense that the
+  conversations stay usable afterwards (section 5.5): the owner decides how
+  long they live.
 
 The group is created in the caller's commit, next to whatever else that commit
 writes; a commit that fails leaves no conversation of it. The layer keeps no
@@ -6580,15 +6585,17 @@ already owns it.
 A host may drive the agents itself. The layer also offers a one-shot drive:
 
 - a **driver task** per agent, owned by the caller's task, submits the agent's
-  prompt to its conversation with a request ID derived from the driver's task
-  ID, waits for the answer, and ends with that answer as its outcome;
+  prompt to its conversation with a request ID derived from the group's ID and
+  the agent's name, waits for the answer, and ends with that answer as its
+  outcome;
 - a **join** waits for every driver of the group and returns one result per
   agent: answered, failed or aborted. One agent's failure does not hide the
-  others' answers.
+  others' answers. A driver that was orphaned or faulted has failed, with the
+  reason it reports.
 
 The driver is an ordinary task (section 5): it resumes from its checkpoint
 after a restart, and the request ID keeps a rerun from submitting the prompt
-twice.
+twice. A run that was aborted ends the agent as aborted, not as failed.
 
 ### 13.3 What the layer does not do
 

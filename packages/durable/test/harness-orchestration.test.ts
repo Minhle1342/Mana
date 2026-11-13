@@ -50,7 +50,11 @@ const Orchestrator = defineTask<
 	phases: {
 		run: async (task, runtime, ctx) =>
 			runtime.commit(async (tx) => {
-				const group = await createGroup(tx, { groupId: task.input.groupId, ownerTaskId: task.id, agents: task.input.agents });
+				const group = await createGroup(tx, {
+					groupId: task.input.groupId,
+					ownerTaskId: task.id,
+					agents: task.input.agents,
+				});
 				const drivers = await createDrivers(tx, { groupId: task.input.groupId, ownerTaskId: task.id, group });
 				return { status: "running", checkpoint: { phase: "join", drivers } };
 			}, ctx),
@@ -64,7 +68,7 @@ const Orchestrator = defineTask<
 });
 
 describe("the orchestration layer", () => {
-	it("creates a group: one conversation per agent, owned by the named task", async () => {
+	it("creates a group of three agents, and nothing else", async () => {
 		const storage = new MemoryStorage();
 		const { harness } = await openTasks(storage, [Anchor]);
 		const root = await harness.root(context);
@@ -76,7 +80,7 @@ describe("the orchestration layer", () => {
 			(tx) =>
 				createGroup(tx, {
 					groupId: "group-1",
-										ownerTaskId: anchor,
+					ownerTaskId: anchor,
 					agents: [
 						{ name: "reader", task: "Read the file." },
 						{ name: "scout", task: "Scout the repository." },
@@ -98,7 +102,10 @@ describe("the orchestration layer", () => {
 	it("gives each conversation the profile its agent asked for", async () => {
 		const storage = new MemoryStorage();
 		const { harness } = await openTasks(storage, [Anchor]);
-		const root = await harness.root(context);
+		// The root's own agent: a child that asks for nothing inherits it.
+		const root = await harness.root(context, {
+			agent: { model: { provider: "faux", modelId: "faux-1" }, cwd: "/work/inherited" },
+		});
 		const anchor = await root.commit(
 			(tx) => tx.createTask(Anchor, null, { ownership: { kind: "conversation" }, background: true }),
 			context,
@@ -107,9 +114,13 @@ describe("the orchestration layer", () => {
 			(tx) =>
 				createGroup(tx, {
 					groupId: "group-1",
-										ownerTaskId: anchor,
+					ownerTaskId: anchor,
 					agents: [
-						{ name: "reader", task: "Read the file.", agent: { cwd: "/work/read" } },
+						{
+							name: "reader",
+							task: "Read the file.",
+							agent: { model: { provider: "faux", modelId: "faux-2" }, cwd: "/work/read" },
+						},
 						{ name: "scout", task: "Scout the repository." },
 					],
 				}),
@@ -117,16 +128,32 @@ describe("the orchestration layer", () => {
 		);
 		const reader = group.agents[0]!;
 		const scout = group.agents[1]!;
+		expect((await harness.snapshot(AgentDoc, reader.conversationId, context))?.model).toEqual({
+			provider: "faux",
+			modelId: "faux-2",
+		});
 		expect((await harness.snapshot(AgentDoc, reader.conversationId, context))?.cwd).toBe("/work/read");
-		expect((await harness.snapshot(AgentDoc, scout.conversationId, context))?.cwd).toBeUndefined();
+		// The agent that asked for nothing inherits the owner's agent: its model and its cwd.
+		const inherited = await harness.snapshot(AgentDoc, scout.conversationId, context);
+		expect(inherited?.cwd).toBe("/work/inherited");
+		expect(inherited?.model).toEqual({ provider: "faux", modelId: "faux-1" });
 	});
 
-	it("drives the group to its answers", async () => {
+	it("drives the group to its answers, all at once", async () => {
 		const setup = chatSetup();
-		setup.faux.setResponses([
-			fauxAssistantMessage([fauxText("The first answer.")]),
-			fauxAssistantMessage([fauxText("The second answer.")]),
-		]);
+		// Both agents answer only once both have asked: the group runs at the same time.
+		const arrived: string[] = [];
+		let open = (): void => {};
+		const gate = new Promise<void>((resolve) => {
+			open = resolve;
+		});
+		const waiting = async () => {
+			arrived.push("asked");
+			if (arrived.length === 2) open();
+			await gate;
+			return fauxAssistantMessage([fauxText("An answer.")]);
+		};
+		setup.faux.setResponses([waiting, waiting]);
 		setup.registry.install(defineExtension({ name: "orchestration", tasks: [Orchestrator, OrchestratedAgent] }));
 		const { harness, root } = await openChat(new MemoryStorage(), setup);
 		const orchestrator = await root.commit(
@@ -134,8 +161,8 @@ describe("the orchestration layer", () => {
 				tx.createTask(
 					Orchestrator,
 					{
-						groupId: "group-1",
-												agents: [
+						groupId: "group-drive",
+						agents: [
 							{ name: "reader", task: "What does the file say?" },
 							{ name: "scout", task: "What is in the repository?" },
 						],
@@ -144,12 +171,14 @@ describe("the orchestration layer", () => {
 				),
 			context,
 		);
+		harness.resume();
 		const settled = await harness.waitForTask(orchestrator, context);
 		expect(settled.state.outcome.status, JSON.stringify(setup.reports.map(String))).toBe("completed");
 		const results = settled.state.outcome.status === "completed" ? settled.state.outcome.result : [];
-		expect(results.map((result) => result.name)).toEqual(["reader", "scout"]);
-		expect(results.map((result) => result.answer)).toEqual(["The first answer.", "The second answer."]);
+		expect(results.map((result) => result.name).sort()).toEqual(["reader", "scout"]);
 		expect(results.every((result) => result.status === "answered")).toBe(true);
+		// Both agents were asked before either answered: the group ran at once.
+		expect(arrived).toHaveLength(2);
 	});
 
 	it("keeps one agent's failure from hiding the others' answers", async () => {
@@ -346,5 +375,44 @@ describe("the orchestration layer's results", () => {
 		const otherResult = results.find((result) => result.name === drivers[1]!.name);
 		expect(stoppedResult?.status).toBe("aborted");
 		expect(otherResult?.status).toBe("answered");
+	});
+
+	it("asks a group the same question twice, and the answer comes once", async () => {
+		const setup = chatSetup();
+		setup.faux.setResponses([fauxAssistantMessage([fauxText("The only answer.")])]);
+		setup.registry.install(defineExtension({ name: "orchestration", tasks: [OrchestratedAgent] }));
+		const { harness, root } = await openChat(new MemoryStorage(), setup);
+		const anchor = await root.commit(
+			(tx) => tx.createTask(Anchor, null, { ownership: { kind: "conversation" }, background: true }),
+			context,
+		);
+		const group = await harness.commit(
+			(tx) =>
+				createGroup(tx, {
+					groupId: "group-rerun",
+					ownerTaskId: anchor,
+					agents: [{ name: "reader", task: "What does the file say?" }],
+				}),
+			context,
+		);
+		harness.resume();
+		// The group is driven twice, as a replay-safe caller would: the same group id, so the same request ids.
+		for (const _attempt of [1, 2]) {
+			await harness.commit(async (tx) => {
+				await createDrivers(tx, { groupId: "group-rerun", ownerTaskId: anchor, group });
+				return undefined;
+			}, context);
+		}
+		const conversation = await harness.conversation(group.agents[0]!.conversationId, context);
+		expect(conversation).toBeDefined();
+		let answers = 0;
+		for (let attempt = 0; attempt < 200; attempt++) {
+			const entries = await conversation!.entries({}, 50, undefined, context);
+			answers = entries.items.filter((entry) => entry.kind === "pi.assistant").length;
+			if (answers > 0) break;
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		// The second driver asked with the same request id: the answer was written once.
+		expect(answers).toBe(1);
 	});
 });
