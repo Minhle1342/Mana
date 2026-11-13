@@ -30,10 +30,18 @@ export async function joinAgents(
 		const outcome = settled.state.outcome;
 		if (outcome.status === "completed") {
 			results.push({ name: driver.name, status: "answered", answer: outcome.result });
+		} else if (outcome.status === "aborted") {
+			results.push({
+				name: driver.name,
+				status: "aborted",
+				...(outcome.reason === undefined ? {} : { error: outcome.reason }),
+			});
 		} else if (outcome.status === "failed") {
 			results.push({ name: driver.name, status: "failed", error: outcome.error.message });
+		} else if (outcome.status === "orphaned") {
+			results.push({ name: driver.name, status: "failed", error: `the agent cannot run: ${outcome.reason}` });
 		} else {
-			results.push({ name: driver.name, status: "aborted" });
+			results.push({ name: driver.name, status: "failed", error: outcome.error.message });
 		}
 	}
 	return results;

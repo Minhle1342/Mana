@@ -1,5 +1,5 @@
-// A group of agents: three conversations created in one commit, driven to their answers in parallel, and joined into
-// one result. The group's answers come back per agent, so one agent's failure does not hide the others'.
+// A group of agents: three conversations created in one commit, driven in parallel, and joined into one result. The
+// group's answers come back per agent, so one agent's failure does not hide the others'.
 // Run from packages/durable:
 //   node --conditions=source --experimental-strip-types test/examples/38-orchestration.ts
 
@@ -16,9 +16,9 @@ import {
 	defineExtension,
 	defineTask,
 	Harness,
-	joinAgents,
 	MemoryStorage,
 	OrchestratedAgent,
+	joinAgents,
 } from "../../src/index.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -27,7 +27,7 @@ const context = BACKGROUND_CONTEXT;
 
 /** Creates a group, drives it, and joins the answers. */
 const Orchestrator = defineTask<
-	{ agents: AgentRequest[] },
+	{ agents: AgentRequest[]; groupId: string },
 	{ phase: "run" } | { phase: "join"; drivers: readonly AgentDriver[] },
 	AgentResult[]
 >({
@@ -38,14 +38,21 @@ const Orchestrator = defineTask<
 		// One commit: the group's conversations, and one driver per agent.
 		run: async (task, runtime, ctx) =>
 			runtime.commit(async (tx) => {
-				const group = await createGroup(tx, { ownerTaskId: task.id, agents: task.input.agents });
-				const drivers = await createDrivers(tx, { ownerTaskId: task.id, group });
+				const group = await createGroup(tx, {
+					groupId: task.input.groupId,
+					ownerTaskId: task.id,
+					agents: task.input.agents,
+				});
+				const drivers = await createDrivers(tx, { groupId: task.input.groupId, ownerTaskId: task.id, group });
 				return { status: "running", checkpoint: { phase: "join", drivers } };
 			}, ctx),
 		// The drivers run at once; the join waits for all of them.
 		join: async (task, runtime, ctx) => {
 			const results = await joinAgents(runtime, { drivers: task.state.checkpoint.drivers }, ctx);
-			await runtime.commit(() => ({ status: "terminal", outcome: { status: "completed", result: results } }), ctx);
+			await runtime.commit(
+				() => ({ status: "terminal", outcome: { status: "completed", result: results } }),
+				ctx,
+			);
 		},
 	},
 	abort: async (_task, runtime, ctx) =>
@@ -54,14 +61,14 @@ const Orchestrator = defineTask<
 
 // ─── Host setup ─────────────────────────────────────────────────────────────
 
-// The three agents answer in turn; each conversation asks for itself.
+// Two agents answer; the third's model fails, and the others' answers still arrive.
 const faux = fauxProvider();
 const models = createModels();
 models.setProvider(faux.provider);
 faux.setResponses([
 	fauxAssistantMessage([fauxText("The file says: hello.")]),
 	fauxAssistantMessage([fauxText("There are three files.")]),
-	fauxAssistantMessage([fauxText("The repository is a monorepo.")]),
+	fauxAssistantMessage([fauxText("The model failed.")], { stopReason: "error", errorMessage: "boom" }),
 ]);
 
 const registry = createRegistry();
@@ -76,6 +83,7 @@ const orchestrator = await root.commit(
 		tx.createTask(
 			Orchestrator,
 			{
+				groupId: "example-group",
 				agents: [
 					{ name: "reader", task: "What does the file say?" },
 					{ name: "counter", task: "How many files are there?" },

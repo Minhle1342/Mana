@@ -17,12 +17,13 @@ import {
 	joinAgents,
 	MemoryStorage,
 	OrchestratedAgent,
+	type TaskId,
 } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { chatSetup, openChat, unanswered } from "./chat-support.ts";
 import { context } from "./session-support.ts";
-import { openTasks } from "./task-support.ts";
+import { aborted, openTasks } from "./task-support.ts";
 
 /** A background anchor that owns a group's conversations, the way p2's subagents are owned. */
 const Anchor = defineTask<null, { phase: "done" }, null>({
@@ -39,7 +40,7 @@ const Anchor = defineTask<null, { phase: "done" }, null>({
 
 /** Creates a group, drives it, and joins the answers. */
 const Orchestrator = defineTask<
-	{ agents: AgentRequest[] },
+	{ agents: AgentRequest[]; groupId: string },
 	{ phase: "run" } | { phase: "join"; drivers: readonly AgentDriver[] },
 	AgentResult[]
 >({
@@ -49,8 +50,8 @@ const Orchestrator = defineTask<
 	phases: {
 		run: async (task, runtime, ctx) =>
 			runtime.commit(async (tx) => {
-				const group = await createGroup(tx, { ownerTaskId: task.id, agents: task.input.agents });
-				const drivers = await createDrivers(tx, { ownerTaskId: task.id, group });
+				const group = await createGroup(tx, { groupId: task.input.groupId, ownerTaskId: task.id, agents: task.input.agents });
+				const drivers = await createDrivers(tx, { groupId: task.input.groupId, ownerTaskId: task.id, group });
 				return { status: "running", checkpoint: { phase: "join", drivers } };
 			}, ctx),
 		join: async (task, runtime, ctx) => {
@@ -74,7 +75,8 @@ describe("the orchestration layer", () => {
 		const group: AgentGroup = await harness.commit(
 			(tx) =>
 				createGroup(tx, {
-					ownerTaskId: anchor,
+					groupId: "group-1",
+										ownerTaskId: anchor,
 					agents: [
 						{ name: "reader", task: "Read the file." },
 						{ name: "scout", task: "Scout the repository." },
@@ -104,7 +106,8 @@ describe("the orchestration layer", () => {
 		const group = await harness.commit(
 			(tx) =>
 				createGroup(tx, {
-					ownerTaskId: anchor,
+					groupId: "group-1",
+										ownerTaskId: anchor,
 					agents: [
 						{ name: "reader", task: "Read the file.", agent: { cwd: "/work/read" } },
 						{ name: "scout", task: "Scout the repository." },
@@ -131,7 +134,8 @@ describe("the orchestration layer", () => {
 				tx.createTask(
 					Orchestrator,
 					{
-						agents: [
+						groupId: "group-1",
+												agents: [
 							{ name: "reader", task: "What does the file say?" },
 							{ name: "scout", task: "What is in the repository?" },
 						],
@@ -161,6 +165,7 @@ describe("the orchestration layer", () => {
 				tx.createTask(
 					Orchestrator,
 					{
+						groupId: "group-1",
 						agents: [
 							{ name: "reader", task: "What does the file say?" },
 							{ name: "scout", task: "What is in the repository?" },
@@ -188,6 +193,7 @@ describe("the orchestration layer", () => {
 				tx.createTask(
 					Orchestrator,
 					{
+						groupId: "group-1",
 						agents: [
 							{ name: "reader", task: "What does the file say?" },
 							{ name: "scout", task: "What is in the repository?" },
@@ -219,7 +225,7 @@ describe("the orchestration layer", () => {
 				(tx) =>
 					tx.createTask(
 						Orchestrator,
-						{ agents: [{ name: "reader", task: "What does the file say?" }] },
+						{ groupId: "group-1", agents: [{ name: "reader", task: "What does the file say?" }] },
 						{ ownership: { kind: "conversation" } },
 					),
 				context,
@@ -249,5 +255,96 @@ describe("the orchestration layer", () => {
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("the orchestration layer's results", () => {
+	it("reports a faulted or orphaned driver as failed, with its reason", async () => {
+		const host = {
+			waitForTask: async (id: TaskId) =>
+				({
+					state: {
+						status: "terminal",
+						outcome:
+							id === 1
+								? { status: "faulted", error: { message: "the driver crashed" } }
+								: { status: "orphaned" },
+					},
+				}) as never,
+		};
+		const results = await joinAgents(
+			host,
+			{
+				drivers: [
+					{ name: "reader", taskId: 1 as TaskId<string> },
+					{ name: "scout", taskId: 2 as TaskId<string> },
+				],
+			},
+			context,
+		);
+		expect(results.map((result) => result.status)).toEqual(["failed", "failed"]);
+		expect(results[0]?.error).toContain("the driver crashed");
+		expect(results[1]?.error).toBeTruthy();
+	});
+
+	it("keeps a driver's answer when the group's other driver is aborted", async () => {
+		const setup = chatSetup();
+		const storage = new MemoryStorage();
+		// Both agents wait for the gate, so both are still working when one run is aborted.
+		let release = (): void => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const waiting = async (_request: unknown, options?: { signal?: AbortSignal }) => {
+			// The wait ends when the gate opens or the run is cancelled.
+			await Promise.race([gate, aborted(options!.signal!)]);
+			return fauxAssistantMessage([fauxText("An answer.")]);
+		};
+		setup.faux.setResponses([waiting, waiting]);
+		setup.registry.install(defineExtension({ name: "orchestration", tasks: [Orchestrator, OrchestratedAgent] }));
+		const { harness, root } = await openChat(storage, setup);
+		const orchestrator = await root.commit(
+			(tx) =>
+				tx.createTask(
+					Orchestrator,
+					{
+						groupId: "group-abort",
+						agents: [
+							{ name: "reader", task: "What does the file say?" },
+							{ name: "scout", task: "What is in the repository?" },
+						],
+					},
+					{ ownership: { kind: "conversation" } },
+				),
+			context,
+		);
+		harness.resume();
+		// The drivers of the group, from the orchestrator's checkpoint.
+		const driversOf = async (): Promise<{ name: string; taskId: TaskId }[]> => {
+			for (let attempt = 0; attempt < 200; attempt++) {
+				const record = await harness.getTask(orchestrator, context);
+				const drivers = (record?.state as { checkpoint?: { drivers?: { name: string; taskId: TaskId }[] } })
+					.checkpoint?.drivers;
+				if (drivers !== undefined) return drivers;
+				await new Promise((resolve) => setTimeout(resolve, 5));
+			}
+			return [];
+		};
+		const drivers = await driversOf();
+		expect(drivers).toHaveLength(2);
+		// The group's conversations: the first agent's run is stopped, the second keeps working.
+		const conversations = await storage.scanConversations({ ownerTaskId: orchestrator }, 10, undefined, context);
+		expect(conversations.items).toHaveLength(2);
+		const stopped = await harness.conversation(conversations.items[0]!.id, context);
+		expect(stopped).toBeDefined();
+		await stopped!.abort(context);
+		release();
+		const settled = await harness.waitForTask(orchestrator, context);
+		expect(settled.state.outcome.status).toBe("completed");
+		const results = settled.state.outcome.status === "completed" ? settled.state.outcome.result : [];
+		const stoppedResult = results.find((result) => result.name === drivers[0]!.name);
+		const otherResult = results.find((result) => result.name === drivers[1]!.name);
+		expect(stoppedResult?.status).toBe("aborted");
+		expect(otherResult?.status).toBe("answered");
 	});
 });

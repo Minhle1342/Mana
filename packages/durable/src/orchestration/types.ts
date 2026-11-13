@@ -10,8 +10,10 @@ export type AgentRequest = {
 	readonly agent?: AgentChange;
 };
 
-/** What `createGroup` needs: the agents, and the task that owns their conversations. */
+/** What `createGroup` needs: the group's id, its agents, and the task that owns their conversations. */
 export type AgentGroupRequest = {
+	/** The group's id: the caller's name for it, and the drivers' request ids come from it. */
+	readonly groupId: string;
 	/** The task that owns the group's conversations. */
 	readonly ownerTaskId: TaskId;
 	readonly agents: readonly AgentRequest[];

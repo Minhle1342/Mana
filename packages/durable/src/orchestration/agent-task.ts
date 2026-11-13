@@ -7,6 +7,8 @@ import type { AgentGroup } from "./types.ts";
 
 /** What a driver runs: the agent's name, its prompt, and the conversation it runs in. */
 export type AgentDriverInput = {
+	/** The group the agent belongs to: its request id, stable across a rerun. */
+	readonly groupId: string;
 	readonly name: string;
 	readonly task: string;
 	readonly conversationId: ConversationId;
@@ -20,6 +22,8 @@ export type AgentDriver = {
 
 /** What `createDrivers` needs: the group, and the task that owns the drivers. */
 export type AgentDriverRequest = {
+	/** The group the drivers belong to: their request ids come from it. */
+	readonly groupId: string;
 	readonly ownerTaskId: TaskId;
 	readonly group: AgentGroup;
 };
@@ -55,18 +59,22 @@ export const OrchestratedAgent = defineTask<AgentDriverInput, { phase: "run" }, 
 				return;
 			}
 			const submission = await conversation.submit(
-				{ type: "input", content: prompt, requestId: `agent:${task.id}` },
+				{ type: "input", content: prompt, requestId: `agent:${task.input.groupId}:${name}` },
 				ctx,
 			);
 			const settled = await submission.wait(ctx);
 			if (settled.status !== "done" || settled.type !== "input") {
+				// A run that was aborted answers nothing: the agent was cancelled, not broken.
+				const aborted = settled.reason === "aborted";
 				await runtime.commit(
 					() => ({
 						status: "terminal",
-						outcome: {
-							status: "failed",
-							error: { message: `Agent ${name} failed: ${settled.reason ?? "no answer"}.` },
-						},
+						outcome: aborted
+							? { status: "aborted" }
+							: {
+									status: "failed",
+									error: { message: `Agent ${name} failed: ${settled.reason ?? "no answer"}.` },
+								},
 					}),
 					ctx,
 				);
@@ -78,8 +86,12 @@ export const OrchestratedAgent = defineTask<AgentDriverInput, { phase: "run" }, 
 			}, ctx);
 		},
 	},
-	abort: async (_task, runtime, ctx) =>
-		runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), ctx),
+	// The driver stops the agent it runs: the conversation it drives keeps working otherwise.
+	abort: async (task, runtime, ctx) => {
+		const conversation = await runtime.conversation(task.input.conversationId, ctx);
+		await conversation?.abort(ctx);
+		await runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), ctx);
+	},
 });
 
 /**
@@ -91,7 +103,7 @@ export async function createDrivers(tx: Tx, request: AgentDriverRequest): Promis
 	for (const agent of request.group.agents) {
 		const taskId = await tx.createTask(
 			OrchestratedAgent,
-			{ name: agent.name, task: agent.task, conversationId: agent.conversationId },
+			{ groupId: request.groupId, name: agent.name, task: agent.task, conversationId: agent.conversationId },
 			{ ownership: { kind: "task", taskId: request.ownerTaskId } },
 		);
 		drivers.push({ name: agent.name, taskId });
