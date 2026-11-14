@@ -1,5 +1,9 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig, mergeConfig } from "vitest/config";
 import baseConfig, { workspaceSourcePaths } from "../../vitest.base.ts";
+
+// durable has no alias in vitest.base.ts: its package entry points at `dist`, which this package's tests do not build.
+const durableSource = (path: string) => fileURLToPath(new URL(`../../packages/durable/src/${path}`, import.meta.url));
 
 export default mergeConfig(
 	baseConfig,
@@ -27,6 +31,13 @@ export default mergeConfig(
 				{ find: /^@mariozechner\/pi-ai\/oauth$/, replacement: workspaceSourcePaths.aiOAuth },
 				{ find: /^@mariozechner\/pi-agent-core$/, replacement: workspaceSourcePaths.agentIndex },
 				{ find: /^@mariozechner\/pi-tui$/, replacement: workspaceSourcePaths.tuiIndex },
+				{ find: /^@earendil-works\/pi-durable$/, replacement: durableSource("index.ts") },
+				{ find: /^@earendil-works\/pi-durable\/tools$/, replacement: durableSource("tools/index.ts") },
+				{ find: /^@earendil-works\/pi-durable\/env\/node$/, replacement: durableSource("env/node.ts") },
+				{
+					find: /^@earendil-works\/pi-durable\/storage\/sqlite\/node$/,
+					replacement: durableSource("storage/sqlite/node.ts"),
+				},
 			],
 		},
 	}),

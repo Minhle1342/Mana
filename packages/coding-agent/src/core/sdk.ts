@@ -9,6 +9,7 @@ import { formatNoModelsAvailableMessage } from "./auth-guidance.ts";
 import { CacheWarmer } from "./cache-warmer.ts";
 import { getClientIdentity } from "./client-identity.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
+import { createDurableAgentsTool } from "./durable/index.ts";
 import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
 import { createToolNameMatcher } from "./mcp-servers.ts";
 import { convertToLlm } from "./messages.ts";
@@ -452,6 +453,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		sessionManager.appendThinkingLevelChange(thinkingLevel);
 	}
 
+	// The multi-agent tool is registered inactive; constructing it opens no store and builds no Harness.
+	const durableAgentsTool = createDurableAgentsTool({
+		models: modelRuntime,
+		sessionManager,
+		agentDir,
+		cwd,
+		model: model === undefined ? undefined : { provider: model.provider, modelId: model.id },
+		thinkingLevel,
+	});
+
 	const session = new AgentSession({
 		agent,
 		sessionManager,
@@ -459,7 +470,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		cwd,
 		scopedModels: options.scopedModels,
 		resourceLoader,
-		customTools: options.customTools,
+		customTools: [...(options.customTools ?? []), durableAgentsTool],
 		modelRuntime,
 		cacheWarmer,
 		initialActiveToolNames,

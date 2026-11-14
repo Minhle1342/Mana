@@ -45,6 +45,8 @@ See [Choose a Model](models.md) for model selection and thinking controls.
 
 Available built-in tools are `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, and `ls`. `defaultTools` can also name `codemode` and `tool_search`, which built-in extensions register inactive, and other extension tools registered inactive.
 
+The `agents` tool is registered inactive too: enable it with `--tools agents` or `defaultTools` to run several subagents at once, each in its own durable conversation. Subagents use their own `read`, `write`, `edit` and `bash` (`powershell` on Windows) tools, not pi's built-in tools, MCP, codemode or skills, and their transcripts are kept in a sqlite file beside the session file.
+
 A list of only `+name` and `-name` entries changes the inherited selection instead of replacing it. For example, this enables `codemode` next to the default tools:
 
 ```json
