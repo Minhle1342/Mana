@@ -1990,7 +1990,10 @@ export class AgentSession {
 		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
 		if (trigger.messageType === "user") {
-			const turnIndex = this.messages.filter((m) => m.role === "user").length + 1;
+			// Count on the branch, not the compaction-aware context: checkpoint ids must survive compaction.
+			const turnIndex =
+				this.sessionManager.getBranch().filter((entry) => entry.type === "message" && entry.message.role === "user")
+					.length + 1;
 			await this._checkpointManager.createCheckpoint(turnIndex).catch(() => {});
 		}
 		let messages: AgentMessage[];

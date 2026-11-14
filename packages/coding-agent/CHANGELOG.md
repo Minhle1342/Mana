@@ -4,14 +4,15 @@
 
 ### Added
 
+- Clicking a user message asks to undo workspace changes to the checkpoint before that message, showing the change summary first.
 - Added `/undo` and `/revert` slash commands to restore workspace changes to previous turn checkpoints and revert undo operations.
 - Edit tool errors for text that cannot be found now list the closest lines in the file with their line numbers.
+- **Multi-agent tool**: the inactive `agents` tool runs several subagents at once on a durable conversation runtime, each with its own transcript that survives a crash and its own `read`, `write`, `edit` and shell tools. Enable it with `--tools agents` or `defaultTools`. See [Tools settings](docs/settings.md#tools).
 - The fullscreen start screen and the regular-mode startup header share an animated braille background. Set `NO_COLOR` or `PI_REDUCED_MOTION=1` to turn it off.
 
 ### Changed
 
 - Automatic retries of HTTP 503 and "currently experiencing high demand" errors now wait 3 s instead of the exponential backoff, so an overloaded provider is retried sooner. `retry.baseDelayMs` still shortens the wait and `retry.maxAgentDelayMs` still caps it.
-
 - Thinking blocks in the transcript are now hidden by default; press `ctrl+t` or set `hideThinkingBlock` to `false` to show them.
 
 ## [1.5.2] - 2026-11-10

@@ -959,7 +959,7 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 	);
 	const handleUndoConfirm = useCallback(
 		async (entryId: number) => {
-			if (busy) throw new Error("Không thể undo khi một lượt đang chạy");
+			if (busy) throw new Error("Cannot undo while a turn is running");
 			const held = host.hold(
 				SessionCheckpoints,
 				{ session: sessionId, conversation: conversationId },
@@ -985,7 +985,7 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 	);
 	const handleRevert = useCallback(
 		async (revertId: string) => {
-			if (busy) throw new Error("Không thể revert khi một lượt đang chạy");
+			if (busy) throw new Error("Cannot revert while a turn is running");
 			const held = host.hold(
 				SessionCheckpoints,
 				{ session: sessionId, conversation: conversationId },
@@ -1027,7 +1027,7 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 		[busy, conversationId, host, sessionId],
 	);
 
-	/** `/undo`: ho.revert sang checkpoint của lượt người dùng gần nhất; `/revert`: khôi phục lại trạng thái trước khi undo. */
+	/** `/undo`: revert to the newest user turn's checkpoint; `/revert`: restore the state from before that undo. */
 	async function handleSlashCommand(text: string) {
 		const held = host.hold(
 			SessionCheckpoints,
@@ -1035,12 +1035,12 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 			BACKGROUND_CONTEXT,
 		);
 		try {
-			if (busy) throw new Error("Không thể dùng lệnh slash khi một lượt đang chạy");
+			if (busy) throw new Error("Cannot run a slash command while a turn is running");
 			await whenLive(held);
 			const checkpoints = liveIn(held, "owner");
 			if (!checkpoints) throw new Error("Only the owner uses checkpoint commands");
 			if (text === "/undo") {
-				// Undo checkpoint của lượt người dùng mới nhất trong transcript.
+				// Undo the checkpoint of the newest user turn in the transcript.
 				const userEntry = [...(view?.entries ?? [])].reverse().find((entry) => entry.kind === "p2.input");
 				const entryId = userEntry?.id ?? newestEntry;
 				const result = await checkpoints.undo({ entryId }, BACKGROUND_CONTEXT);
@@ -1050,7 +1050,7 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 					deleted: result.revertDeleted,
 				});
 			} else if (text === "/revert") {
-				if (!revertBanner) throw new Error("Không có revert đang hoạt động để khôi phục");
+				if (!revertBanner) throw new Error("No active revert to restore");
 				await checkpoints.revert({ revertId: revertBanner.revertId }, BACKGROUND_CONTEXT);
 				setRevertBanner(undefined);
 			}

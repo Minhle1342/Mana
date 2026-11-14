@@ -4681,31 +4681,15 @@ export class InteractiveMode {
 		return textBlocks.map((c) => (c as { text: string }).text).join("");
 	}
 
-	private findUserMessageTurnId(message: Message, messageId?: string): string | number | undefined {
-		if (messageId) {
-			const entries = this.sessionManager.getEntries();
-			let userTurnCount = 0;
-			for (const entry of entries) {
-				if (entry.type === "message" && entry.message.role === "user") {
-					userTurnCount++;
-					if (entry.id === messageId) {
-						return userTurnCount;
-					}
-				}
-			}
+	/** Turn index of a user message, counted on the active branch so compaction never resets it. */
+	private findUserMessageTurnId(message: Message, messageId?: string): number | undefined {
+		let turn = 0;
+		for (const entry of this.sessionManager.getBranch()) {
+			if (entry.type !== "message" || entry.message.role !== "user") continue;
+			turn++;
+			if ((messageId && entry.id === messageId) || entry.message === message) return turn;
 		}
-
-		const messages = this.session.messages;
-		let userIndex = 0;
-		for (const m of messages) {
-			if (m.role === "user") {
-				userIndex++;
-				if (m === message) {
-					return userIndex;
-				}
-			}
-		}
-		return userIndex > 0 ? userIndex : undefined;
+		return undefined;
 	}
 
 	private async executeUndo(turnId?: string | number): Promise<void> {
@@ -4721,7 +4705,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private async showUndoModal(turnId?: string | number): Promise<void> {
+	private async showUndoModal(message: Message, messageId?: string): Promise<void> {
 		if (this.session.isStreaming) {
 			this.showWarning("Wait for the current response to finish before undoing.");
 			return;
@@ -4732,6 +4716,12 @@ export class InteractiveMode {
 		}
 		if (this.session.isBashRunning) {
 			this.showWarning("Wait for the running command to finish before undoing.");
+			return;
+		}
+
+		const turnId = this.findUserMessageTurnId(message, messageId);
+		if (turnId === undefined) {
+			this.showWarning("No checkpoint found for this message.");
 			return;
 		}
 
@@ -4902,9 +4892,8 @@ export class InteractiveMode {
 					if (this.chatContainer.children.length > 0) {
 						this.chatContainer.addChild(new Spacer(1));
 					}
-					const turnId = this.findUserMessageTurnId(message, options?.messageId);
 					const onUserMessageClick = () => {
-						void this.showUndoModal(turnId);
+						void this.showUndoModal(message, options?.messageId);
 					};
 					const skillBlock = parseSkillBlock(textContent);
 					if (skillBlock) {

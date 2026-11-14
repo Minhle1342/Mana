@@ -17,7 +17,7 @@ export class UserMessageComponent extends Container {
 	private markdownTransformers: readonly MarkdownTransformer[];
 	private messageId?: string;
 	private timestamp?: string;
-	private onClick?: () => void;
+	private readonly onClick?: () => void;
 
 	constructor(
 		text: string,
@@ -70,11 +70,12 @@ export class UserMessageComponent extends Container {
 			},
 		);
 
-		if (this.onClick) {
+		const onClick = this.onClick;
+		if (onClick) {
 			this.addChild(
 				new MouseRegion(markdownComponent, (event) => {
 					if (event.type !== "click" || event.button !== "left") return undefined;
-					this.onClick?.();
+					onClick();
 					return { handled: true };
 				}),
 			);

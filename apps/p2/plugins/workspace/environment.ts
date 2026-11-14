@@ -1164,8 +1164,8 @@ export class Workspace {
 		if (checkout.exitCode !== 0) {
 			throw new Error(`checkout failed: ${checkout.stderr || checkout.stdout}`);
 		}
-		// Dọn các file untracked sinh ra sau undo để khôi phục đúng trạng thái trước khi undo,
-		// scoped vào thư mục của cuộc trò chuyện này.
+		// Remove untracked files created after the undo so the pre-undo state comes back exactly,
+		// scoped to this conversation's directory.
 		const clean = await this.git(["clean", "-fd", "--", "."], 64 * 1024, context);
 		if (clean.exitCode !== 0) {
 			throw new Error(`clean failed: ${clean.stderr || clean.stdout}`);

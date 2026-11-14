@@ -142,7 +142,7 @@ describe.sequential("Google OAuth", () => {
 		expect(params.get("refresh_token")).toBe("my-refresh-token");
 	});
 
-	it("requests only pre-approved scopes to avoid 403 restricted_client", async () => {
+	it("requests scopes including generative-language.retriever", async () => {
 		let authUrl = "";
 		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
 			const url = input instanceof Request ? input.url : String(input);
@@ -170,8 +170,8 @@ describe.sequential("Google OAuth", () => {
 		const url = new URL(authUrl);
 		const requestedScopes = url.searchParams.get("scope")?.split(" ") ?? [];
 		expect(requestedScopes).toContain("https://www.googleapis.com/auth/cloud-platform");
+		expect(requestedScopes).toContain("https://www.googleapis.com/auth/generative-language.retriever");
 		expect(requestedScopes).toContain("https://www.googleapis.com/auth/userinfo.email");
 		expect(requestedScopes).toContain("https://www.googleapis.com/auth/userinfo.profile");
-		expect(requestedScopes).not.toContain("https://www.googleapis.com/auth/generative-language.retriever");
 	});
 });

@@ -1,4 +1,5 @@
-import { describe, expect, test } from "vitest";
+import type { TuiMouseEvent } from "@earendil-works/pi-tui";
+import { describe, expect, test, vi } from "vitest";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -54,6 +55,33 @@ describe("UserMessageComponent", () => {
 		component.invalidate();
 
 		expect(stripAnsi(component.render(80).join("\n"))).toContain("Message after");
+	});
+
+	test("fires the click handler for a left click only", () => {
+		initTheme("dark");
+		const onClick = vi.fn();
+		const component = new UserMessageComponent("hello", undefined, 1, [], undefined, undefined, onClick);
+		const lines = component.render(20);
+		const event: TuiMouseEvent = {
+			type: "click",
+			button: "left",
+			x: 1,
+			y: 1,
+			screenX: 1,
+			screenY: 1,
+			width: 20,
+			height: lines.length,
+			shift: false,
+			alt: false,
+			ctrl: false,
+			clickCount: 1,
+		};
+
+		expect(component.handleMouse({ ...event, button: "right" })).toBeUndefined();
+		expect(onClick).not.toHaveBeenCalled();
+
+		expect(component.handleMouse(event)?.handled).toBe(true);
+		expect(onClick).toHaveBeenCalledOnce();
 	});
 
 	test("passes persisted entry identity in transformer context; live leaves it undefined", () => {
