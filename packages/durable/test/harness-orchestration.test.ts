@@ -428,4 +428,41 @@ describe("the orchestration layer", () => {
 		// The second driver asked with the same request id: the answer was written once.
 		expect(answers).toBe(1);
 	});
+
+	it("handles non-object and raw string errors defensively", async () => {
+		const host: AgentJoinHost = {
+			waitForTask: async <R>(id: TaskId<R>): Promise<SettledTask<R>> => ({
+				id,
+				conversationId: ROOT_CONVERSATION_ID,
+				kind: "test.driver",
+				version: 1,
+				input: null,
+				background: true,
+				abortRequested: false,
+				state: {
+					status: "terminal",
+					outcome:
+						id === 1
+							? ({
+									status: "failed",
+									error: "raw string error",
+								} as unknown as SettledTask<R>["state"]["outcome"])
+							: ({ status: "faulted", error: null } as unknown as SettledTask<R>["state"]["outcome"]),
+				},
+			}),
+		};
+		const results = await joinAgents(
+			host,
+			{
+				drivers: [
+					{ name: "string-err", taskId: 1 as TaskId<string> },
+					{ name: "null-err", taskId: 2 as TaskId<string> },
+				],
+			},
+			context,
+		);
+		expect(results.map((r) => r.status)).toEqual(["failed", "failed"]);
+		expect(results[0]?.error).toBe("raw string error");
+		expect(results[1]?.error).toBe("unknown error");
+	});
 });

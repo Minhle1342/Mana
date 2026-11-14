@@ -15,6 +15,15 @@ export type AgentJoinRequest = {
 	readonly drivers: readonly AgentDriver[];
 };
 
+function formatError(error: unknown): string {
+	if (error === undefined || error === null) return "unknown error";
+	if (typeof error === "string") return error;
+	if (typeof error === "object" && "message" in error && typeof (error as { message: unknown }).message === "string") {
+		return (error as { message: string }).message;
+	}
+	return String(error);
+}
+
 /**
  * Waits for every driver of the group and reports one result per agent: its answer, or why it has none. One agent's
  * failure does not hide the others' answers.
@@ -24,23 +33,27 @@ export async function joinAgents(
 	request: AgentJoinRequest,
 	context: Context,
 ): Promise<AgentResult[]> {
-	const results: AgentResult[] = [];
-	for (const driver of request.drivers) {
-		const settled = await host.waitForTask(driver.taskId, context);
-		const outcome = settled.state.outcome;
-		if (outcome.status === "completed") {
-			results.push({ name: driver.name, status: "answered", answer: outcome.result });
-		} else if (outcome.status === "aborted") {
-			results.push({
-				name: driver.name,
-				status: "aborted",
-				...(outcome.reason === undefined ? {} : { error: outcome.reason }),
-			});
-		} else if (outcome.status === "failed" || outcome.status === "faulted") {
-			results.push({ name: driver.name, status: "failed", error: outcome.error.message });
-		} else if (outcome.status === "orphaned") {
-			results.push({ name: driver.name, status: "failed", error: `the agent cannot run: ${outcome.reason}` });
-		}
-	}
-	return results;
+	return Promise.all(
+		request.drivers.map(async (driver): Promise<AgentResult> => {
+			const settled = await host.waitForTask(driver.taskId, context);
+			const outcome = settled.state.outcome;
+			if (outcome.status === "completed") {
+				return { name: driver.name, status: "answered", answer: outcome.result };
+			}
+			if (outcome.status === "aborted") {
+				return {
+					name: driver.name,
+					status: "aborted",
+					...(outcome.reason === undefined ? {} : { error: outcome.reason }),
+				};
+			}
+			if (outcome.status === "failed" || outcome.status === "faulted") {
+				return { name: driver.name, status: "failed", error: formatError(outcome.error) };
+			}
+			if (outcome.status === "orphaned") {
+				return { name: driver.name, status: "failed", error: `the agent cannot run: ${outcome.reason}` };
+			}
+			return { name: driver.name, status: "failed", error: "unknown outcome" };
+		}),
+	);
 }
