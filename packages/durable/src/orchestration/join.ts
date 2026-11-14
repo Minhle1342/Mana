@@ -36,12 +36,10 @@ export async function joinAgents(
 				status: "aborted",
 				...(outcome.reason === undefined ? {} : { error: outcome.reason }),
 			});
-		} else if (outcome.status === "failed") {
+		} else if (outcome.status === "failed" || outcome.status === "faulted") {
 			results.push({ name: driver.name, status: "failed", error: outcome.error.message });
 		} else if (outcome.status === "orphaned") {
 			results.push({ name: driver.name, status: "failed", error: `the agent cannot run: ${outcome.reason}` });
-		} else {
-			results.push({ name: driver.name, status: "failed", error: outcome.error.message });
 		}
 	}
 	return results;

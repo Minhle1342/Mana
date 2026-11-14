@@ -352,10 +352,16 @@ function hop(): Promise<void> {
 	if (typeof setImmediate === "function") return new Promise((resolve) => setImmediate(resolve));
 	const channel = new MessageChannel();
 	return new Promise((resolve) => {
-		channel.port1.onmessage = () => {
-			channel.port1.close();
-			resolve();
-		};
+		// `addEventListener` + `start()` rather than `onmessage`: the Node `MessagePort` type has no `onmessage`.
+		channel.port1.addEventListener(
+			"message",
+			() => {
+				channel.port1.close();
+				resolve();
+			},
+			{ once: true },
+		);
+		channel.port1.start();
 		channel.port2.postMessage(undefined);
 	});
 }
