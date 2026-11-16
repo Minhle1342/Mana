@@ -10,11 +10,6 @@ import type { OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../typ
 import { startOAuthCallbackServer, waitForCallbackOrManualInput } from "./callback-server.ts";
 import { generatePKCE } from "./pkce.ts";
 
-const decode = (s: string) => atob(s);
-const DEFAULT_CLIENT_ID = decode(
-	"NjgxMjU1ODA5Mzk1LW9vOGZ0Mm9wcmRybnA5ZTNhcWY2YXYzaG1kaWIxMzVqLmFwcHMuZ29vZ2xldXNlcmNvbnRlbnQuY29t",
-);
-const DEFAULT_CLIENT_SECRET = decode("R09DU1BYLTR1SGdNUG0tMW83U2stZ2VWNkN1NWNsWEZzeGw=");
 const AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const CALLBACK_HOST = getProviderEnvValue("PI_OAUTH_CALLBACK_HOST") || "127.0.0.1";
@@ -23,20 +18,29 @@ const CALLBACK_PATH = "/oauth2callback";
 const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`;
 const DEFAULT_SCOPES = [
 	"https://www.googleapis.com/auth/cloud-platform",
+	"https://www.googleapis.com/auth/generative-language.retriever",
 	"https://www.googleapis.com/auth/userinfo.email",
 	"https://www.googleapis.com/auth/userinfo.profile",
 ].join(" ");
 
 function getClientId(): string {
-	return getProviderEnvValue("GOOGLE_OAUTH_CLIENT_ID") || getProviderEnvValue("GOOGLE_CLIENT_ID") || DEFAULT_CLIENT_ID;
+	const id = getProviderEnvValue("GOOGLE_OAUTH_CLIENT_ID") || getProviderEnvValue("GOOGLE_CLIENT_ID");
+	if (!id) {
+		throw new Error(
+			"Google sign-in needs an OAuth client id: set GOOGLE_OAUTH_CLIENT_ID (pi-test loads the repo-root .env).",
+		);
+	}
+	return id;
 }
 
 function getClientSecret(): string {
-	return (
-		getProviderEnvValue("GOOGLE_OAUTH_CLIENT_SECRET") ||
-		getProviderEnvValue("GOOGLE_CLIENT_SECRET") ||
-		DEFAULT_CLIENT_SECRET
-	);
+	const secret = getProviderEnvValue("GOOGLE_OAUTH_CLIENT_SECRET") || getProviderEnvValue("GOOGLE_CLIENT_SECRET");
+	if (!secret) {
+		throw new Error(
+			"Google sign-in needs an OAuth client secret: set GOOGLE_OAUTH_CLIENT_SECRET (pi-test loads the repo-root .env).",
+		);
+	}
+	return secret;
 }
 
 function getScopes(): string {

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InMemoryCredentialStore } from "../src/auth/credential-store.ts";
 import { googleOAuth } from "../src/auth/oauth/google.ts";
 import { createModels } from "../src/models.ts";
@@ -13,6 +13,11 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe.sequential("Google OAuth", () => {
+	beforeEach(() => {
+		vi.stubEnv("GOOGLE_OAUTH_CLIENT_ID", "test-client-id");
+		vi.stubEnv("GOOGLE_OAUTH_CLIENT_SECRET", "test-client-secret");
+	});
+
 	afterEach(() => {
 		vi.unstubAllGlobals();
 		vi.unstubAllEnvs();
@@ -173,5 +178,18 @@ describe.sequential("Google OAuth", () => {
 		expect(requestedScopes).toContain("https://www.googleapis.com/auth/generative-language.retriever");
 		expect(requestedScopes).toContain("https://www.googleapis.com/auth/userinfo.email");
 		expect(requestedScopes).toContain("https://www.googleapis.com/auth/userinfo.profile");
+	});
+
+	it("refuses sign-in when no OAuth client id is configured", async () => {
+		vi.stubEnv("GOOGLE_OAUTH_CLIENT_ID", "");
+		vi.stubEnv("GOOGLE_CLIENT_ID", "");
+
+		await expect(
+			googleOAuth.login({
+				signal: neverAbortedSignal,
+				notify: () => {},
+				prompt: async () => "",
+			}),
+		).rejects.toThrow("GOOGLE_OAUTH_CLIENT_ID");
 	});
 });
