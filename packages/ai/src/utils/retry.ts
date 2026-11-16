@@ -17,9 +17,15 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
 
 	// Generic quota/budget/billing exhaustion. `insufficient_quota` is OpenAI's
 	// quota/billing error code; the other strings cover common gateway wording.
+	// Specific billing exhaustion and account status errors. Bare "billing" is avoided
+	// because transient rate limits (such as Google AI Studio 429) include advisory
+	// text like "please check your plan and billing details".
 	"insufficient_quota",
 	"out of budget",
-	"billing",
+	"billing\\s*(?:hard\\s*)?limit",
+	"billing\\s*(?:account\\s*)?(?:is\\s*)?(?:disabled|inactive|suspended|closed|not\\s*found|not\\s*active)",
+	"billing\\s*(?:is\\s*)?not\\s*enabled",
+	"billing\\s*(?:issue|problem|failure|error)",
 
 	// Sign in with ChatGPT: the subscription's shared usage limit, which resets
 	// after hours rather than seconds.
@@ -117,8 +123,8 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"try your request again",
 	"please retry your request",
 
-	// gRPC based providers (e.g. NVIDIA NIM)
-	"ResourceExhausted",
+	// gRPC based providers (e.g. NVIDIA NIM, Google Gemini)
+	"Resource_?Exhausted",
 
 	// Quota exceeded is transient for the user's request: retry instead of failing fast.
 	"quota exceeded",

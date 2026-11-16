@@ -135,6 +135,36 @@ describe("provider retry classification", () => {
 		).toBe(true);
 	});
 
+	it("retries Google AI Studio quota errors with plan and billing advisory text", () => {
+		const googleQuotaError = JSON.stringify({
+			error: {
+				message: JSON.stringify({
+					error: {
+						code: 429,
+						message:
+							"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://aistudio.google.com/docs/rate-limits. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-3.5-flash-lite, description: Generate content input tokens per minute limit exceeded on Free Tier. See https://aistudio.google.com/docs/rate-limits.\nPlease retry in 43.126008774s.",
+						status: "RESOURCE_EXHAUSTED",
+					},
+				}),
+				code: 429,
+				status: "Too Many Requests",
+			},
+		});
+		expect(
+			isRetryableAssistantError(fauxAssistantMessage("", { stopReason: "error", errorMessage: googleQuotaError })),
+		).toBe(true);
+	});
+
+	it.each([
+		"Billing hard limit reached",
+		"Your account has exceeded its billing limit",
+		"Billing account is disabled",
+		"Billing is not enabled for this project",
+		"Your project has a billing issue",
+	])("keeps genuine billing errors non-retryable: %s", (errorMessage) => {
+		expect(isRetryableAssistantError(fauxAssistantMessage("", { stopReason: "error", errorMessage }))).toBe(false);
+	});
+
 	it("keeps the ChatGPT subscription usage limit non-retryable", () => {
 		const errorMessage =
 			'OpenAI API error (429): {"code":"subscription_sharing_usage_limit_exceeded","message":"Usage limit reached."}';
