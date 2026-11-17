@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the OmniRoute provider (`omniroute`), an OpenAI-compatible AI router that routes each request to a provider you configure. Authenticate with `OMNIROUTE_API_KEY` (or `/login omniroute`); the `auto` model is always available and custom models can be added under `omniroute` in `models.json` for a self-hosted endpoint such as `http://localhost:20128/v1` or OmniRoute Cloud.
+
 ### Changed
 
 - `retryDelayMs` waits 3000 ms for HTTP 503 and "currently experiencing high demand" errors instead of the exponential backoff, so an overloaded provider is retried sooner. `baseDelayMs` still shortens it and `maxAgentDelayMs` still caps it. `isHighDemand503Error` is exported to classify those messages.

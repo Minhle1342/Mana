@@ -35,6 +35,7 @@ This table covers providers with a single primary API-key variable. Providers th
 | OpenAI | `OPENAI_API_KEY` |
 | DeepSeek | `DEEPSEEK_API_KEY` |
 | NVIDIA NIM | `NVIDIA_API_KEY` |
+| OmniRoute | `OMNIROUTE_API_KEY` |
 | Google Gemini | `GEMINI_API_KEY` |
 | GitHub Copilot | `COPILOT_GITHUB_TOKEN` |
 | Mistral | `MISTRAL_API_KEY` |
@@ -132,6 +133,27 @@ Regional endpoints filter models to their region. To use one, set the base URL i
 ```
 
 If the base URL rejects the key at `/models/user` or does not have that endpoint, for example a proxy configured as the OpenRouter base URL, Pi lists every OpenRouter model.
+
+### OmniRoute
+
+OmniRoute is an open-source AI router you self-host (default `http://localhost:20128/v1`) or use via OmniRoute Cloud. It routes each request to a provider you configure.
+
+Authenticate with `/login omniroute` or `OMNIROUTE_API_KEY`.
+
+The `auto` model routes each request to a configured provider. Add your own models under `omniroute` in [`models.json`](models.md#configure-a-compatible-endpoint):
+
+```json
+{
+  "providers": {
+    "omniroute": {
+      "baseUrl": "http://localhost:20128/v1",
+      "models": [
+        { "id": "cc/claude-opus-4-6", "api": "openai-completions" }
+      ]
+    }
+  }
+}
+```
 
 ### Azure OpenAI
 

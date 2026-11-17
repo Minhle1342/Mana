@@ -99,6 +99,7 @@ export type KnownProvider =
 	| "radius"
 	| "typesafe"
 	| "nvidia"
+	| "omniroute"
 	| "deepseek"
 	| "github-copilot"
 	| "xai"

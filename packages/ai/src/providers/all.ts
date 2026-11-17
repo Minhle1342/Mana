@@ -25,6 +25,7 @@ import { mistralProvider } from "./mistral.ts";
 import { moonshotaiProvider } from "./moonshotai.ts";
 import { moonshotaiCnProvider } from "./moonshotai-cn.ts";
 import { nvidiaProvider } from "./nvidia.ts";
+import { omnirouteProvider } from "./omniroute.ts";
 import { openaiProvider } from "./openai.ts";
 import { openaiCodexProvider } from "./openai-codex.ts";
 import { opencodeProvider } from "./opencode.ts";
@@ -163,6 +164,7 @@ export function builtinProviders(): Provider[] {
 		openaiCodexProvider(),
 		opencodeProvider(),
 		opencodeGoProvider(),
+		omnirouteProvider(),
 		openrouterProvider(),
 		qwenTokenPlanProvider(),
 		qwenTokenPlanCnProvider(),

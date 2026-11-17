@@ -24,6 +24,7 @@ import mistral from "./mistral.ts";
 import moonshotai from "./moonshotai.ts";
 import moonshotaiCn from "./moonshotai-cn.ts";
 import nvidia from "./nvidia.ts";
+import omniroute from "./omniroute.ts";
 import openai from "./openai.ts";
 import openaiCodex from "./openai-codex.ts";
 import opencode from "./opencode.ts";
@@ -73,6 +74,7 @@ export const PROVIDERS: readonly ProviderDefinition[] = [
 	openai,
 	opencodeGo,
 	opencode,
+	omniroute,
 	openrouter,
 	qwenTokenPlanCn,
 	qwenTokenPlanIndividual,
