@@ -46,7 +46,7 @@ export function spawnProcessSync(
  * us reading, while a quiet inherited handle (e.g. a Windows daemonized descendant
  * that never lets `close` fire) still releases us after the grace elapses.
  */
-export function waitForChildProcess(child: ChildProcess): Promise<number | null> {
+export function waitForChildProcess(child: ChildProcess, options: { keepStreamsOpen?: boolean } = {}): Promise<number | null> {
 	return new Promise((resolve, reject) => {
 		let settled = false;
 		let exited = false;
@@ -73,8 +73,11 @@ export function waitForChildProcess(child: ChildProcess): Promise<number | null>
 			if (settled) return;
 			settled = true;
 			cleanup();
-			child.stdout?.destroy();
-			child.stderr?.destroy();
+			// Detached waits keep the streams open so the caller can keep draining output.
+			if (!options.keepStreamsOpen) {
+				child.stdout?.destroy();
+				child.stderr?.destroy();
+			}
 			resolve(code);
 		};
 

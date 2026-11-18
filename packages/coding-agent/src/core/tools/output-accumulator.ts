@@ -242,9 +242,9 @@ export class OutputAccumulator {
 		);
 	}
 
-	private ensureTempFile(): void {
+	private ensureTempFile(): string {
 		if (this.tempFilePath) {
-			return;
+			return this.tempFilePath;
 		}
 		const { path, stream } = createOutputFileStream(this.tempFilePrefix, ".log");
 		this.tempFilePath = path;
@@ -253,5 +253,11 @@ export class OutputAccumulator {
 			this.tempFileStream.write(chunk);
 		}
 		this.rawChunks = [];
+		return this.tempFilePath;
+	}
+
+	/** Forces all output into the temp file and returns its path, without finishing the accumulator. */
+	persist(): string {
+		return this.ensureTempFile();
 	}
 }
