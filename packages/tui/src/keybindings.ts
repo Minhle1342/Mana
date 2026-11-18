@@ -29,6 +29,7 @@ export interface Keybindings {
 	"tui.editor.yank": true;
 	"tui.editor.yankPop": true;
 	"tui.editor.undo": true;
+	"tui.editor.redo": true;
 	// Selection: Shift-navigation extends it, Alt+C copies it.
 	"tui.editor.selectCharLeft": true;
 	"tui.editor.selectCharRight": true;
@@ -150,6 +151,7 @@ export const TUI_KEYBINDINGS = {
 	"tui.editor.yank": { defaultKeys: "ctrl+y", description: "Yank" },
 	"tui.editor.yankPop": { defaultKeys: "alt+y", description: "Yank pop" },
 	"tui.editor.undo": { defaultKeys: "ctrl+-", description: "Undo" },
+	"tui.editor.redo": { defaultKeys: "ctrl+shift+z", description: "Redo" },
 	"tui.editor.selectCharLeft": { defaultKeys: "shift+left", description: "Extend selection left" },
 	"tui.editor.selectCharRight": { defaultKeys: "shift+right", description: "Extend selection right" },
 	"tui.editor.selectUp": { defaultKeys: "shift+up", description: "Extend selection up" },

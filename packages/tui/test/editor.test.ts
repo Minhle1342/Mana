@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { type AutocompleteProvider, CombinedAutocompleteProvider } from "../src/autocomplete.ts";
 import { Editor, wordWrapLine } from "../src/components/editor.ts";
+import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "../src/keybindings.ts";
 import {
 	FAKE_CURSOR_END,
 	FAKE_CURSOR_START,
@@ -4613,5 +4614,70 @@ describe("Editor component", () => {
 			assert.strictEqual(stripTerminalSequences(lines[1]!).trimEnd(), "hello world");
 		});
 	});
+	});
+
+	describe("Redo", () => {
+		const UNDO = "\x1b[45;5u";
+		const REDO = "\x1b[90;6u";
+
+		it("restores the last undone edit", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			editor.handleInput("hello");
+			editor.handleInput(UNDO);
+			assert.strictEqual(editor.getText(), "");
+
+			editor.handleInput(REDO);
+
+			assert.strictEqual(editor.getText(), "hello");
+		});
+
+		it("is a no-op while the redo stack is empty", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			editor.handleInput("hello");
+
+			editor.handleInput(REDO);
+
+			assert.strictEqual(editor.getText(), "hello");
+		});
+
+		it("is invalidated by a new edit", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			editor.handleInput("hello");
+			editor.handleInput(UNDO);
+
+			editor.handleInput("x");
+			editor.handleInput(REDO);
+
+			assert.strictEqual(editor.getText(), "x");
+		});
+
+		it("restores paste markers with their content", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			const pasted = Array.from({ length: 12 }, (_, index) => `pasted ${index}`).join("\n");
+			editor.handleInput(`\x1b[200~${pasted}\x1b[201~`);
+			assert.strictEqual(editor.getText(), "[paste #1 +12 lines]");
+
+			editor.handleInput(UNDO);
+			assert.strictEqual(editor.getText(), "");
+			editor.handleInput(REDO);
+
+			assert.strictEqual(editor.getText(), "[paste #1 +12 lines]");
+			assert.strictEqual(editor.getExpandedText(), pasted);
+		});
+
+		it("resolves through its keybinding id", () => {
+			setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, { "tui.editor.redo": "ctrl+r" }));
+			try {
+				const editor = new Editor(createTestTUI(), defaultEditorTheme);
+				editor.handleInput("hello");
+				editor.handleInput(UNDO);
+
+				editor.handleInput("\x12"); // Ctrl+R
+
+				assert.strictEqual(editor.getText(), "hello");
+			} finally {
+				setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS));
+			}
+		});
 	});
 });

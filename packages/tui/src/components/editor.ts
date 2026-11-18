@@ -398,8 +398,9 @@ export class Editor implements Component, Focusable {
 	/** True while a key or mouse gesture extends the selection, so movements keep the anchor. */
 	private extendingSelection = false;
 
-	// Undo support
+	// Undo and redo support: any new snapshot invalidates the redo stack.
 	private undoStack = new UndoStack<EditorSnapshot>();
+	private redoStack = new UndoStack<EditorSnapshot>();
 
 	private readonly placeholder: string = "";
 	private readonly placeholderStyle: (text: string) => string = (text) => text;
@@ -982,6 +983,12 @@ export class Editor implements Component, Focusable {
 		// Undo
 		if (kb.matches(data, "tui.editor.undo")) {
 			this.undo();
+			return;
+		}
+
+		// Redo
+		if (kb.matches(data, "tui.editor.redo")) {
+			this.redo();
 			return;
 		}
 
@@ -1632,6 +1639,7 @@ export class Editor implements Component, Focusable {
 		this.exitHistoryBrowsing();
 		this.scrollOffset = 0;
 		this.undoStack.clear();
+		this.redoStack.clear();
 		this.lastAction = null;
 
 		if (this.onChange) this.onChange("");
@@ -2382,12 +2390,27 @@ export class Editor implements Component, Focusable {
 
 	private pushUndoSnapshot(): void {
 		this.undoStack.push({ state: this.state, pastes: this.pastes, pasteCounter: this.pasteCounter });
+		this.redoStack.clear();
 	}
 
 	private undo(): void {
 		this.exitHistoryBrowsing();
 		const snapshot = this.undoStack.pop();
 		if (!snapshot) return;
+		this.redoStack.push({ state: this.state, pastes: this.pastes, pasteCounter: this.pasteCounter });
+		this.restoreSnapshot(snapshot);
+	}
+
+	private redo(): void {
+		this.exitHistoryBrowsing();
+		const snapshot = this.redoStack.pop();
+		if (!snapshot) return;
+		this.undoStack.push({ state: this.state, pastes: this.pastes, pasteCounter: this.pasteCounter });
+		this.restoreSnapshot(snapshot);
+	}
+
+	/** Restore a snapshot as the current editor state, dropping any selection over it. */
+	private restoreSnapshot(snapshot: EditorSnapshot): void {
 		this.clearSelection();
 		Object.assign(this.state, snapshot.state);
 		this.pastes = snapshot.pastes;

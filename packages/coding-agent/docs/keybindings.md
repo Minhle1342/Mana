@@ -80,6 +80,7 @@ The dedicated history actions browse prompt history regardless of cursor positio
 | `tui.editor.yank` | `ctrl+y` | Paste most recently deleted text |
 | `tui.editor.yankPop` | `alt+y` | Cycle through deleted text after yank |
 | `tui.editor.undo` | `ctrl+-` (`ctrl+z` on Windows; `alt+z` on WSL) | Undo last edit |
+| `tui.editor.redo` | `ctrl+shift+z` (`alt+shift+z` on WSL) | Redo the last undone edit |
 
 #### Selection
 
