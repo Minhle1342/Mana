@@ -382,6 +382,10 @@
     "app.tree.filter.cycleBackward": {
       "$ref": "#/$defs/KeybindingValue",
       "description": "Tree filter: cycle backward"
+    },
+    "app.bash.background": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Background the running shell command"
     }
   },
   "additionalProperties": {

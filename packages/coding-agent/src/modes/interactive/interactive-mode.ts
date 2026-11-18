@@ -4778,8 +4778,8 @@ export class InteractiveMode {
 			this.showStatus("No running shell command to background");
 		} else if (outcome.status === "unsupported") {
 			this.showStatus("This shell backend does not support backgrounding");
-		} else if (outcome.status === "exit") {
-			this.showStatus("The shell command already finished");
+		} else if (outcome.status === "settled") {
+			this.showStatus("The shell command already finished or stopped");
 		} else {
 			this.showStatus(`Command backgrounded; output: ${outcome.outputPath}`);
 		}

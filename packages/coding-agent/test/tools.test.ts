@@ -53,6 +53,24 @@ function getTextOutput(result: any): string {
 	);
 }
 
+/**
+ * The WriteStream opens an output file before it flushes queued writes, so the file can exist
+ * while still being empty. Poll the content, not the file.
+ */
+async function waitForFileContent(path: string, expected: string): Promise<string> {
+	for (let waited = 0; waited < 2000; waited += 10) {
+		let content = "";
+		try {
+			content = readFileSync(path, "utf-8");
+		} catch {
+			// The stream has not created the file yet.
+		}
+		if (content.includes(expected)) return content;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	return "";
+}
+
 function createTinyBmp1x1Red24bpp(): Buffer {
 	const buffer = Buffer.alloc(58);
 	buffer.write("BM", 0, "ascii");
@@ -564,13 +582,9 @@ describe("Coding Agent Tools", () => {
 			const result = await exec;
 			const path = getTextOutput(result).match(/written to (\S+?\.log)/)?.[1];
 			expect(path).toBeTruthy();
-			// The WriteStream creates the file asynchronously on its first open.
-			for (let waited = 0; !existsSync(path!) && waited < 2000; waited += 10) {
-				await new Promise((resolve) => setTimeout(resolve, 10));
-			}
-			expect(existsSync(path!)).toBe(true);
-			expect(readFileSync(path!, "utf-8")).toContain("early");
-			expect(readFileSync(path!, "utf-8")).not.toContain("late");
+			const earlyContent = await waitForFileContent(path!, "early");
+			expect(earlyContent).toContain("early");
+			expect(earlyContent).not.toContain("late");
 			expect(await request).toEqual({ status: "detached", outputPath: path });
 			// The detached child keeps writing to the file until it exits.
 			await new Promise((resolve) => setTimeout(resolve, 2200));

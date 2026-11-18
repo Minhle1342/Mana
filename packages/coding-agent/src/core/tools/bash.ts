@@ -186,7 +186,10 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 						throw new ShellTimeoutError(
 							timeout,
 							exitedBeforeDeadlineAfterMs !== undefined
-								? { exitCode: resolvedExitCode, afterSeconds: Math.round(exitedBeforeDeadlineAfterMs / 100) / 10 }
+								? {
+										exitCode: resolvedExitCode,
+										afterSeconds: Math.round(exitedBeforeDeadlineAfterMs / 100) / 10,
+									}
 								: undefined,
 						);
 					}
@@ -296,7 +299,8 @@ export interface BashToolOptions {
 export type BashBackgroundOutcome =
 	| { status: "detached"; outputPath: string }
 	| { status: "unsupported" }
-	| { status: "exit" };
+	/** The command settled before the request took effect: it finished, was aborted, or timed out. */
+	| { status: "settled" };
 
 /** Per-execution registration in the session's single background slot. */
 export interface BashBackgroundHandle {
@@ -410,12 +414,13 @@ export function createShellToolDefinition(
 			const background = options?.background?.register();
 			let backgroundSettled = false;
 			let acceptingOutput = true;
+			let reportingUpdates = true;
 			let updateTimer: NodeJS.Timeout | undefined;
 			let updateDirty = false;
 			let lastUpdateAt = 0;
 
 			const emitOutputUpdate = () => {
-				if (!onUpdate || !updateDirty) return;
+				if (!onUpdate || !reportingUpdates || !updateDirty) return;
 				updateDirty = false;
 				lastUpdateAt = Date.now();
 				const snapshot = output.snapshot({ persistIfTruncated: true });
@@ -436,7 +441,7 @@ export function createShellToolDefinition(
 			};
 
 			const scheduleOutputUpdate = () => {
-				if (!onUpdate) return;
+				if (!onUpdate || !reportingUpdates) return;
 				updateDirty = true;
 				const delay = BASH_UPDATE_THROTTLE_MS - (Date.now() - lastUpdateAt);
 				if (delay <= 0) {
@@ -514,11 +519,16 @@ export function createShellToolDefinition(
 						// until the child exits, then close it. No exit code is reported after detach.
 						const outputPath = output.persist();
 						settleBackground({ status: "detached", outputPath });
+						// The tool has returned, so the agent loop drops every later update: stop snapshotting
+						// output and only keep appending it to the file.
+						reportingUpdates = false;
+						clearUpdateTimer();
 						const closeDetached = () => {
 							acceptingOutput = false;
 							output.finish();
 							clearUpdateTimer();
-							return output.closeTempFile();
+							// The tool already returned, so a write error here has no result to report.
+							return output.closeTempFile().catch(() => undefined);
 						};
 						result.completion.then(closeDetached, closeDetached);
 						return {
@@ -532,7 +542,7 @@ export function createShellToolDefinition(
 						};
 					}
 					if (background) {
-						settleBackground(background.requested() ? { status: "unsupported" } : { status: "exit" });
+						settleBackground(background.requested() ? { status: "unsupported" } : { status: "settled" });
 					}
 				} catch (err) {
 					const snapshot = await finishOutput();
@@ -581,7 +591,7 @@ export function createShellToolDefinition(
 			} finally {
 				clearUpdateTimer();
 				// Abort, timeout or thrown errors release the slot; a detached run settled earlier.
-				if (background && !backgroundSettled) settleBackground({ status: "exit" });
+				if (background && !backgroundSettled) settleBackground({ status: "settled" });
 			}
 		},
 		...createShellRenderers(config.prompt),

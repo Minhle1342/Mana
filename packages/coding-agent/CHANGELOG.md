@@ -13,7 +13,6 @@
 
 ### Changed
 
-- `/undo` now also moves the conversation back to just before the undone user turn and puts that prompt back in the editor; `/revert` redoes both. Clicking a user message still restores workspace changes only.
 - Automatic retries of HTTP 503 and "currently experiencing high demand" errors now wait 3 s instead of the exponential backoff, so an overloaded provider is retried sooner. `retry.baseDelayMs` still shortens the wait and `retry.maxAgentDelayMs` still caps it.
 - Thinking blocks in the transcript are now hidden by default; press `ctrl+t` or set `hideThinkingBlock` to `false` to show them.
 

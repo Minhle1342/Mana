@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
@@ -10,6 +9,19 @@ import {
 
 function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
 	return result.content.map((part) => (part.type === "text" ? (part.text ?? "") : "")).join("");
+}
+
+/**
+ * The WriteStream opens the temp file before it flushes queued writes, so a file can exist
+ * while still being empty. Poll the content, not the file.
+ */
+async function waitForContent(path: string, expected: string): Promise<string> {
+	for (let waited = 0; waited < 2000; waited += 10) {
+		const content = await readFile(path, "utf-8").catch(() => "");
+		if (content.includes(expected)) return content;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	return await readFile(path, "utf-8").catch(() => "");
 }
 
 /** Fake backend that honors detach: returns a detached result and lets the test finish the child later. */
@@ -68,11 +80,7 @@ describe("bash tool backgrounding", () => {
 		expect(text).toContain("detached");
 		const path = text.match(/written to (\S+?\.log)/)?.[1];
 		expect(path).toBeTruthy();
-		// The WriteStream creates the file asynchronously on its first open.
-		for (let waited = 0; !existsSync(path!) && waited < 2000; waited += 10) {
-			await new Promise((resolve) => setTimeout(resolve, 10));
-		}
-		const contents = await readFile(path!, "utf-8");
+		const contents = await waitForContent(path!, "before\n");
 		expect(contents).toBe("before\n");
 		const outcome = await request;
 		expect(outcome).toEqual({ status: "detached", outputPath: path });
@@ -104,6 +112,39 @@ describe("bash tool backgrounding", () => {
 		expect(await readFile(path!, "utf-8")).toBe("before\nafter-detach\n");
 	});
 
+	it("stops reporting output updates once the command is detached", async () => {
+		const controller = createBashBackgroundController();
+		const child = createDetachableOperations();
+		const tool = createBashToolDefinition(process.cwd(), {
+			operations: child.operations,
+			exposeSessionEnvironment: false,
+			background: controller,
+		});
+
+		const updates: string[] = [];
+		const execute = tool.execute(
+			"bg-updates",
+			{ command: "x" },
+			undefined,
+			(partial) => {
+				updates.push(textOf(partial as { content: Array<{ type: string; text?: string }> }));
+			},
+			{} as never,
+		);
+		const request = controller.request();
+		const result = await execute;
+		const updatesAtDetach = updates.length;
+
+		// The agent loop has already dropped the update sink, so the tool must not keep snapshotting output.
+		child.emitAfterDetach(Buffer.from("after-detach\n"));
+		await new Promise((resolve) => setTimeout(resolve, 250));
+		expect(updates.length).toBe(updatesAtDetach);
+
+		child.finishChild();
+		expect((await request).status).toBe("detached");
+		expect(textOf(result)).toContain("detached");
+	});
+
 	it("reports an unsupported backend when the request arrives but the command finishes normally", async () => {
 		const controller = createBashBackgroundController();
 		let release: (() => void) | undefined;
@@ -129,7 +170,7 @@ describe("bash tool backgrounding", () => {
 		expect(await controller.request()).toEqual({ status: "no-command" });
 	});
 
-	it("reports exit when no background request was made", async () => {
+	it("releases the slot when the command finishes without a background request", async () => {
 		const controller = createBashBackgroundController();
 		let release: (() => void) | undefined;
 		const operations = createPlainOperations({

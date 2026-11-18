@@ -20,12 +20,12 @@ describe("InteractiveMode Alt+G background handler", () => {
 		expect(instance.showStatus).toHaveBeenCalledWith("Command backgrounded; output: /tmp/out.log");
 	});
 
-	it("shows statuses for no-command, unsupported, and already-finished cases", async () => {
+	it("shows statuses for no-command, unsupported, and already-settled cases", async () => {
 		const backgroundBash = vi
 			.fn()
 			.mockResolvedValueOnce({ status: "no-command" })
 			.mockResolvedValueOnce({ status: "unsupported" })
-			.mockResolvedValueOnce({ status: "exit" });
+			.mockResolvedValueOnce({ status: "settled" });
 		const instance = createInstance({ backgroundBash });
 
 		await instance.handleBackgroundBash();
@@ -35,6 +35,6 @@ describe("InteractiveMode Alt+G background handler", () => {
 		expect(instance.showStatus).toHaveBeenLastCalledWith("This shell backend does not support backgrounding");
 
 		await instance.handleBackgroundBash();
-		expect(instance.showStatus).toHaveBeenLastCalledWith("The shell command already finished");
+		expect(instance.showStatus).toHaveBeenLastCalledWith("The shell command already finished or stopped");
 	});
 });
