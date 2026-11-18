@@ -148,7 +148,12 @@ import {
 	type NormalizedBuildSystemPromptOptions,
 	normalizeBuildSystemPromptOptions,
 } from "./system-prompt.ts";
-import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
+import {
+	type BashBackgroundOutcome,
+	type BashOperations,
+	createBashBackgroundController,
+	createLocalBashOperations,
+} from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import { addUsageToTotals, combineUsage, createUsageTotals } from "./usage-totals.ts";
@@ -479,6 +484,8 @@ export class AgentSession {
 	// Bash execution state
 	private readonly _bashAbortControllers = new Set<AbortController>();
 	private _pendingBashMessages: BashExecutionMessage[] = [];
+	// Single background slot for shell tool commands; Alt+G targets the most recent one.
+	private readonly _bashBackground = createBashBackgroundController();
 
 	// Extension system
 	private _extensionRunner!: ExtensionRunner;
@@ -3833,7 +3840,8 @@ export class AgentSession {
 				)
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
-					bash: { commandPrefix: shellCommandPrefix, shellPath },
+					bash: { commandPrefix: shellCommandPrefix, shellPath, background: this._bashBackground },
+					powershell: { background: this._bashBackground },
 				});
 
 		this._baseToolDefinitions = new Map(
@@ -4133,6 +4141,14 @@ export class AgentSession {
 		for (const abortController of [...this._bashAbortControllers]) {
 			abortController.abort();
 		}
+	}
+
+	/**
+	 * Background the running shell tool command (Alt+G). The command keeps running and its output
+	 * keeps appending to the returned temp file; no exit code is reported afterwards.
+	 */
+	backgroundBash(): Promise<BashBackgroundOutcome | { status: "no-command" }> {
+		return this._bashBackground.request();
 	}
 
 	/** Whether a bash command is currently running */
