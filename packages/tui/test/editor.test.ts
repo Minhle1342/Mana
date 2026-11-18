@@ -4545,6 +4545,12 @@ describe("Editor component", () => {
 				assert.strictEqual(pasting.getText(), "hello pasted");
 				pasting.handleInput(UNDO);
 				assert.strictEqual(pasting.getText(), "hello world");
+
+				const deleting = new Editor(createTestTUI(), defaultEditorTheme);
+				deleting.setText("hello world");
+				for (let index = 0; index < 5; index++) deleting.handleInput(SHIFT_LEFT);
+				deleting.handleInput("\x1b[3~"); // Delete
+				assert.strictEqual(deleting.getText(), "hello ");
 			});
 
 			it("extends upward across wrapped lines and brings the window with the head", () => {
