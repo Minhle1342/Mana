@@ -100,6 +100,7 @@ export type KnownProvider =
 	| "typesafe"
 	| "nvidia"
 	| "omniroute"
+	| "freeaiapikey"
 	| "deepseek"
 	| "github-copilot"
 	| "xai"

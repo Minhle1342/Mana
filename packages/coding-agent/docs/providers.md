@@ -36,6 +36,7 @@ This table covers providers with a single primary API-key variable. Providers th
 | DeepSeek | `DEEPSEEK_API_KEY` |
 | NVIDIA NIM | `NVIDIA_API_KEY` |
 | OmniRoute | `OMNIROUTE_API_KEY` |
+| FreeAIapiKey | `FREEAIAPIKEY_API_KEY` |
 | Google Gemini | `GEMINI_API_KEY` |
 | GitHub Copilot | `COPILOT_GITHUB_TOKEN` |
 | Mistral | `MISTRAL_API_KEY` |
@@ -154,6 +155,14 @@ The `auto` model routes each request to a configured provider. Add your own mode
   }
 }
 ```
+
+### FreeAIapiKey
+
+FreeAIapiKey is an OpenAI-compatible API gateway (`https://api.freeaiapikey.com/v1`) providing access to frontier models (Claude, GPT, Moonshot Kimi).
+
+Authenticate with `/login freeaiapikey` or `FREEAIAPIKEY_API_KEY`.
+
+Models can be referenced as `--model freeaiapikey/anthropic/claude-sonnet-5.5` or configured in [`models.json`](models.md).
 
 ### Azure OpenAI
 

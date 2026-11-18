@@ -500,6 +500,7 @@ Built-in providers resolve these env vars (Node.js; in browsers pass `apiKey` ex
 | DeepSeek | `DEEPSEEK_API_KEY` |
 | NVIDIA NIM | `NVIDIA_API_KEY` |
 | OmniRoute | `OMNIROUTE_API_KEY` |
+| FreeAIapiKey | `FREEAIAPIKEY_API_KEY` |
 | Google | `GEMINI_API_KEY` |
 | Vertex AI | `GOOGLE_CLOUD_API_KEY` or `GOOGLE_CLOUD_PROJECT` (or `GCLOUD_PROJECT`) + `GOOGLE_CLOUD_LOCATION` + ADC |
 | Mistral | `MISTRAL_API_KEY` |

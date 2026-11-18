@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added the FreeAIapiKey provider (`freeaiapikey`), an OpenAI-compatible API gateway (`https://api.freeaiapikey.com/v1`). Authenticate with `FREEAIAPIKEY_API_KEY` (or `/login freeaiapikey`).
 - Added the OmniRoute provider (`omniroute`), an OpenAI-compatible AI router that routes each request to a provider you configure. Authenticate with `OMNIROUTE_API_KEY` (or `/login omniroute`); the `auto` model is always available and custom models can be added under `omniroute` in `models.json` for a self-hosted endpoint such as `http://localhost:20128/v1` or OmniRoute Cloud.
 
 ### Changed

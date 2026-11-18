@@ -429,6 +429,7 @@ ${chalk.bold("Environment Variables:")}
   DEEPSEEK_API_KEY                 - DeepSeek API key
   NVIDIA_API_KEY                   - NVIDIA NIM API key
   OMNIROUTE_API_KEY                - OmniRoute API key
+  FREEAIAPIKEY_API_KEY             - FreeAIapiKey API key
   GEMINI_API_KEY                   - Google Gemini API key
   GROQ_API_KEY                     - Groq API key
   CEREBRAS_API_KEY                 - Cerebras API key

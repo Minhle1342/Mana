@@ -11,6 +11,7 @@ import { CLOUDFLARE_AI_GATEWAY_CLASSIFIER_MODELS, CLOUDFLARE_AI_GATEWAY_IMAGE_MO
 import { CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS, CLOUDFLARE_WORKERS_AI_IMAGE_MODELS, CLOUDFLARE_WORKERS_AI_MODELS } from "./providers/cloudflare-workers-ai.models.ts";
 import { DEEPSEEK_CLASSIFIER_MODELS, DEEPSEEK_IMAGE_MODELS, DEEPSEEK_MODELS } from "./providers/deepseek.models.ts";
 import { FIREWORKS_CLASSIFIER_MODELS, FIREWORKS_IMAGE_MODELS, FIREWORKS_MODELS } from "./providers/fireworks.models.ts";
+import { FREEAIAPIKEY_CLASSIFIER_MODELS, FREEAIAPIKEY_IMAGE_MODELS, FREEAIAPIKEY_MODELS } from "./providers/freeaiapikey.models.ts";
 import { GITHUB_COPILOT_CLASSIFIER_MODELS, GITHUB_COPILOT_IMAGE_MODELS, GITHUB_COPILOT_MODELS } from "./providers/github-copilot.models.ts";
 import { GOOGLE_CLASSIFIER_MODELS, GOOGLE_IMAGE_MODELS, GOOGLE_MODELS } from "./providers/google.models.ts";
 import { GOOGLE_VERTEX_CLASSIFIER_MODELS, GOOGLE_VERTEX_IMAGE_MODELS, GOOGLE_VERTEX_MODELS } from "./providers/google-vertex.models.ts";
@@ -57,6 +58,7 @@ export const MODELS: {
 	readonly "cloudflare-workers-ai": typeof CLOUDFLARE_WORKERS_AI_MODELS;
 	readonly "deepseek": typeof DEEPSEEK_MODELS;
 	readonly "fireworks": typeof FIREWORKS_MODELS;
+	readonly "freeaiapikey": typeof FREEAIAPIKEY_MODELS;
 	readonly "github-copilot": typeof GITHUB_COPILOT_MODELS;
 	readonly "google": typeof GOOGLE_MODELS;
 	readonly "google-vertex": typeof GOOGLE_VERTEX_MODELS;
@@ -102,6 +104,7 @@ export const MODELS: {
 	"cloudflare-workers-ai": CLOUDFLARE_WORKERS_AI_MODELS,
 	"deepseek": DEEPSEEK_MODELS,
 	"fireworks": FIREWORKS_MODELS,
+	"freeaiapikey": FREEAIAPIKEY_MODELS,
 	"github-copilot": GITHUB_COPILOT_MODELS,
 	"google": GOOGLE_MODELS,
 	"google-vertex": GOOGLE_VERTEX_MODELS,
@@ -149,6 +152,7 @@ export const IMAGE_MODELS: {
 	readonly "cloudflare-workers-ai": typeof CLOUDFLARE_WORKERS_AI_IMAGE_MODELS;
 	readonly "deepseek": typeof DEEPSEEK_IMAGE_MODELS;
 	readonly "fireworks": typeof FIREWORKS_IMAGE_MODELS;
+	readonly "freeaiapikey": typeof FREEAIAPIKEY_IMAGE_MODELS;
 	readonly "github-copilot": typeof GITHUB_COPILOT_IMAGE_MODELS;
 	readonly "google": typeof GOOGLE_IMAGE_MODELS;
 	readonly "google-vertex": typeof GOOGLE_VERTEX_IMAGE_MODELS;
@@ -194,6 +198,7 @@ export const IMAGE_MODELS: {
 	"cloudflare-workers-ai": CLOUDFLARE_WORKERS_AI_IMAGE_MODELS,
 	"deepseek": DEEPSEEK_IMAGE_MODELS,
 	"fireworks": FIREWORKS_IMAGE_MODELS,
+	"freeaiapikey": FREEAIAPIKEY_IMAGE_MODELS,
 	"github-copilot": GITHUB_COPILOT_IMAGE_MODELS,
 	"google": GOOGLE_IMAGE_MODELS,
 	"google-vertex": GOOGLE_VERTEX_IMAGE_MODELS,
@@ -241,6 +246,7 @@ export const CLASSIFIER_MODELS: {
 	readonly "cloudflare-workers-ai": typeof CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS;
 	readonly "deepseek": typeof DEEPSEEK_CLASSIFIER_MODELS;
 	readonly "fireworks": typeof FIREWORKS_CLASSIFIER_MODELS;
+	readonly "freeaiapikey": typeof FREEAIAPIKEY_CLASSIFIER_MODELS;
 	readonly "github-copilot": typeof GITHUB_COPILOT_CLASSIFIER_MODELS;
 	readonly "google": typeof GOOGLE_CLASSIFIER_MODELS;
 	readonly "google-vertex": typeof GOOGLE_VERTEX_CLASSIFIER_MODELS;
@@ -286,6 +292,7 @@ export const CLASSIFIER_MODELS: {
 	"cloudflare-workers-ai": CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS,
 	"deepseek": DEEPSEEK_CLASSIFIER_MODELS,
 	"fireworks": FIREWORKS_CLASSIFIER_MODELS,
+	"freeaiapikey": FREEAIAPIKEY_CLASSIFIER_MODELS,
 	"github-copilot": GITHUB_COPILOT_CLASSIFIER_MODELS,
 	"google": GOOGLE_CLASSIFIER_MODELS,
 	"google-vertex": GOOGLE_VERTEX_CLASSIFIER_MODELS,
