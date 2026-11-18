@@ -7,6 +7,7 @@ import { executeBashWithOperations } from "../src/core/bash-executor.ts";
 import type { ExtensionToolContext } from "../src/core/extensions/types.ts";
 import {
 	type BashOperations,
+	createBashBackgroundController,
 	createBashTool,
 	createBashToolDefinition,
 	createLocalBashOperations,
@@ -521,6 +522,73 @@ describe("Coding Agent Tools", () => {
 			expect(getTextOutput(result)).toContain("test output");
 			expect(result.details).toBeUndefined();
 		});
+
+		it("detaches the local child without killing it and keeps draining output", async () => {
+			const operations = createLocalBashOperations();
+			const chunks: Buffer[] = [];
+			let resolveDetach: (() => void) | undefined;
+			const detach = new Promise<void>((resolve) => {
+				resolveDetach = resolve;
+			});
+			const exec = operations.exec("printf 'early\\n'; sleep 1; printf 'late\\n'", testDir, {
+				onData: (data) => chunks.push(data),
+				detach,
+			});
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			resolveDetach?.();
+			const result = await exec;
+			expect(result.detached).toBe(true);
+			// The local backend always sets completion on a detached result.
+			const completion = await result.completion!;
+			expect(completion.exitCode).toBe(0);
+			// The detached child ran to completion and its tail reached the drain.
+			expect(Buffer.concat(chunks).toString()).toContain("late");
+		}, 15000);
+
+		it("backgrounds a running shell tool command and reports the growing output file", async () => {
+			const controller = createBashBackgroundController();
+			const tool = createBashToolDefinition(testDir, {
+				operations: createLocalBashOperations(),
+				exposeSessionEnvironment: false,
+				background: controller,
+			});
+			const exec = tool.execute(
+				"test-call-bg",
+				{ command: "printf 'early\\n'; sleep 2; printf 'late\\n'" },
+				undefined,
+				undefined,
+				{} as never,
+			);
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			const request = controller.request();
+			const result = await exec;
+			const path = getTextOutput(result).match(/written to (\S+?\.log)/)?.[1];
+			expect(path).toBeTruthy();
+			// The WriteStream creates the file asynchronously on its first open.
+			for (let waited = 0; !existsSync(path!) && waited < 2000; waited += 10) {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			expect(existsSync(path!)).toBe(true);
+			expect(readFileSync(path!, "utf-8")).toContain("early");
+			expect(readFileSync(path!, "utf-8")).not.toContain("late");
+			expect(await request).toEqual({ status: "detached", outputPath: path });
+			// The detached child keeps writing to the file until it exits.
+			await new Promise((resolve) => setTimeout(resolve, 2200));
+			expect(readFileSync(path!, "utf-8")).toContain("late");
+		}, 15000);
+
+		it("still aborts the local child while waiting for a background request", async () => {
+			const operations = createLocalBashOperations();
+			const abortController = new AbortController();
+			const exec = operations.exec("printf 'x\\n'; sleep 5", testDir, {
+				onData: () => {},
+				signal: abortController.signal,
+				detach: new Promise(() => {}),
+			});
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			abortController.abort();
+			await expect(exec).rejects.toThrow("aborted");
+		}, 15000);
 
 		it("should report non-zero exit codes as error results with structured content", async () => {
 			const result = await bashTool.execute("test-call-9", { command: "echo out; exit 3" });

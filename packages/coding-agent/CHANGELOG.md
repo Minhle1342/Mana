@@ -4,6 +4,7 @@
 
 ### Added
 
+- `alt+g` (`app.bash.background`) backgrounds the running shell command: the tool returns immediately with a temp output path, output keeps appending there, and the agent can continue. No exit code is reported after detaching.
 - Clicking a user message asks to undo workspace changes to the checkpoint before that message, showing the change summary first.
 - Added `/undo` and `/revert` slash commands to restore workspace changes to previous turn checkpoints and revert undo operations.
 - Edit tool errors for text that cannot be found now list the closest lines in the file with their line numbers.
@@ -12,6 +13,7 @@
 
 ### Changed
 
+- `/undo` now also moves the conversation back to just before the undone user turn and puts that prompt back in the editor; `/revert` redoes both. Clicking a user message still restores workspace changes only.
 - Automatic retries of HTTP 503 and "currently experiencing high demand" errors now wait 3 s instead of the exponential backoff, so an overloaded provider is retried sooner. `retry.baseDelayMs` still shortens the wait and `retry.maxAgentDelayMs` still caps it.
 - Thinking blocks in the transcript are now hidden by default; press `ctrl+t` or set `hideThinkingBlock` to `false` to show them.
 
