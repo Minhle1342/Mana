@@ -4428,4 +4428,23 @@ describe("Editor component", () => {
 			assert.strictEqual(submitted, pastedText);
 		});
 	});
+
+	describe("Terminal fit", () => {
+		it("renders no more lines than the terminal has rows on a 6-row terminal", () => {
+			const editor = new Editor(createTestTUI(40, 6), defaultEditorTheme);
+			editor.setText(Array.from({ length: 10 }, (_, index) => `line ${index}`).join("\n"));
+
+			const lines = editor.render(40);
+
+			assert.ok(lines.length <= 6, `rendered ${lines.length} lines for a 6-row terminal`);
+		});
+
+		it("keeps the 30% height budget on a tall terminal", () => {
+			const editor = new Editor(createTestTUI(40, 40), defaultEditorTheme);
+			editor.setText(Array.from({ length: 40 }, (_, index) => `line ${index}`).join("\n"));
+
+			// 12 content lines plus the two borders.
+			assert.strictEqual(editor.render(40).length, 14);
+		});
+	});
 });

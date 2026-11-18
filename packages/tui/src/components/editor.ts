@@ -294,6 +294,14 @@ function createScrollBorder(direction: "↑" | "↓", hiddenLineCount: number, w
 	return sliceByColumn(indicator, 0, indicatorWidth, true) + ellipsis;
 }
 
+/**
+ * Content lines the editor may show for a terminal of `rows`: 30% of the terminal, at least five,
+ * and never more than the rows left once the two borders are drawn.
+ */
+function visibleLineBudget(rows: number): number {
+	return Math.max(1, Math.min(rows - 2, Math.max(5, Math.floor(rows * 0.3))));
+}
+
 export class Editor implements Component, Focusable {
 	private state: EditorState = {
 		lines: [""],
@@ -538,9 +546,7 @@ export class Editor implements Component, Focusable {
 		// Layout the text
 		const layoutLines = this.layoutText(layoutWidth);
 
-		// Calculate max visible lines: 30% of terminal height, minimum 5 lines
-		const terminalRows = this.tui.terminal.rows;
-		const maxVisibleLines = Math.max(5, Math.floor(terminalRows * 0.3));
+		const maxVisibleLines = visibleLineBudget(this.tui.terminal.rows);
 
 		// Find the cursor line index in layoutLines
 		let cursorLineIndex = layoutLines.findIndex((line) => line.hasCursor);
@@ -1970,8 +1976,7 @@ export class Editor implements Component, Focusable {
 	 */
 	private pageScroll(direction: -1 | 1): void {
 		this.lastAction = null;
-		const terminalRows = this.tui.terminal.rows;
-		const pageSize = Math.max(5, Math.floor(terminalRows * 0.3));
+		const pageSize = visibleLineBudget(this.tui.terminal.rows);
 
 		const visualLines = this.buildVisualLineMap(this.lastWidth);
 		const currentVisualLine = this.findCurrentVisualLine(visualLines);
