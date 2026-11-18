@@ -78,7 +78,8 @@ export interface BashOperations {
 	 * @param cwd Working directory
 	 * @param options Execution options
 	 * @returns Promise resolving to the exit code. Report signal terminations as 128 + signal number;
-	 * a null exit code is treated as a failed command.
+	 * a null exit code is treated as a failed command. Backends that support backgrounding resolve
+	 * early with `detached` once `detach` fires; `completion` then resolves when the command later exits.
 	 */
 	exec: (
 		command: string,
@@ -88,8 +89,14 @@ export interface BashOperations {
 			signal?: AbortSignal;
 			timeout?: number;
 			env?: NodeJS.ProcessEnv;
+			/** Resolves when the user requests backgrounding this command. */
+			detach?: Promise<void>;
 		},
-	) => Promise<{ exitCode: number | null }>;
+	) => Promise<{
+		exitCode: number | null;
+		detached?: boolean;
+		completion?: Promise<{ exitCode: number | null }>;
+	}>;
 }
 
 /**
@@ -109,7 +116,7 @@ class ShellTimeoutError extends Error {
 /** Shared process execution used by the built-in shell tools. */
 export function createLocalShellOperations(shellName: string, resolveShellConfig: () => ShellConfig): BashOperations {
 	return {
-		exec: async (command, cwd, { onData, signal, timeout, env }) => {
+		exec: async (command, cwd, { onData, signal, timeout, env, detach }) => {
 			const timeoutMs = resolveTimeoutMs(timeout);
 			if (signal?.aborted) {
 				throw new Error("aborted");
@@ -142,6 +149,7 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 			let timedOut = false;
 			let exitedBeforeDeadlineAfterMs: number | undefined;
 			let timeoutHandle: NodeJS.Timeout | undefined;
+			let returnedDetached = false;
 			const onAbort = () => {
 				if (child.pid) killProcessTree(child.pid);
 			};
@@ -165,27 +173,57 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 					if (signal.aborted) onAbort();
 					else signal.addEventListener("abort", onAbort, { once: true });
 				}
+
+				const settle = (exitCode: number | null): { exitCode: number | null } => {
+					if (signal?.aborted) {
+						throw new Error("aborted");
+					}
+					// A signal-killed shell has no exit code. Use the standard shell convention so
+					// callers do not mistake the termination for a successful command.
+					const signalCode = child.signalCode;
+					const resolvedExitCode = exitCode ?? (signalCode ? 128 + (osConstants.signals[signalCode] ?? 0) : 1);
+					if (timedOut) {
+						throw new ShellTimeoutError(
+							timeout,
+							exitedBeforeDeadlineAfterMs !== undefined
+								? { exitCode: resolvedExitCode, afterSeconds: Math.round(exitedBeforeDeadlineAfterMs / 100) / 10 }
+								: undefined,
+						);
+					}
+					return { exitCode: resolvedExitCode };
+				};
+
+				if (detach) {
+					// Race the child wait against the background request, without killing on detach:
+					// the detached child keeps draining into the tool's accumulator.
+					const exited = waitForChildProcess(child, { keepStreamsOpen: true });
+					const detached = await Promise.race([detach.then(() => true), exited.then(() => false)]);
+					if (detached) {
+						returnedDetached = true;
+						// After detach there is no live handle: stop the timeout and abort-kill, keep draining.
+						if (timeoutHandle) {
+							clearTimeout(timeoutHandle);
+							timeoutHandle = undefined;
+						}
+						if (signal) signal.removeEventListener("abort", onAbort);
+						return {
+							exitCode: null,
+							detached: true,
+							completion: exited.then((exitCode) => {
+								if (child.pid) untrackDetachedChildPid(child.pid);
+								return { exitCode };
+							}),
+						};
+					}
+					return settle(await exited);
+				}
+
 				// Handle shell spawn errors and wait for the process to terminate without hanging
 				// on inherited stdio handles held by detached descendants.
-				const exitCode = await waitForChildProcess(child);
-				if (signal?.aborted) {
-					throw new Error("aborted");
-				}
-				// A signal-killed shell has no exit code. Use the standard shell convention so
-				// callers do not mistake the termination for a successful command.
-				const signalCode = child.signalCode;
-				const resolvedExitCode = exitCode ?? (signalCode ? 128 + (osConstants.signals[signalCode] ?? 0) : 1);
-				if (timedOut) {
-					throw new ShellTimeoutError(
-						timeout,
-						exitedBeforeDeadlineAfterMs !== undefined
-							? { exitCode: resolvedExitCode, afterSeconds: Math.round(exitedBeforeDeadlineAfterMs / 100) / 10 }
-							: undefined,
-					);
-				}
-				return { exitCode: resolvedExitCode };
+				return settle(await waitForChildProcess(child));
 			} finally {
-				if (child.pid) untrackDetachedChildPid(child.pid);
+				// A detached child untracks itself when it completes; pid tracking outlives this call.
+				if (!returnedDetached && child.pid) untrackDetachedChildPid(child.pid);
 				if (timeoutHandle) clearTimeout(timeoutHandle);
 				if (signal) signal.removeEventListener("abort", onAbort);
 			}
@@ -250,6 +288,73 @@ export interface BashToolOptions {
 	exposeSessionEnvironment?: boolean;
 	/** Hook to adjust command, cwd, or env before execution */
 	spawnHook?: BashSpawnHook;
+	/** Session-owned background slot; absent when backgrounding is unavailable. */
+	background?: BashBackgroundController;
+}
+
+/** What a background request ended up doing. */
+export type BashBackgroundOutcome =
+	| { status: "detached"; outputPath: string }
+	| { status: "unsupported" }
+	| { status: "exit" };
+
+/** Per-execution registration in the session's single background slot. */
+export interface BashBackgroundHandle {
+	/** Flags the request and unblocks the backend's detach wait. */
+	request: () => void;
+	/** Resolves when `request` has been called. */
+	detach: Promise<void>;
+	/** Whether `request` has been called. */
+	requested: () => boolean;
+	/** The tool reports the final outcome through this; it also releases the slot. */
+	settle: (outcome: BashBackgroundOutcome) => void;
+	/** Resolves with the tool's final outcome for the requester. */
+	outcome: Promise<BashBackgroundOutcome>;
+}
+
+/** Controller the session passes to shell tools so Alt+G can reach the running command. */
+export interface BashBackgroundController {
+	/** Registers the most recent execution in the slot. */
+	register: () => BashBackgroundHandle;
+	/** Requests backgrounding of the registered command and awaits its outcome. */
+	request: () => Promise<BashBackgroundOutcome | { status: "no-command" }>;
+}
+
+/** Single-slot background registry: the most recently started shell tool command wins. */
+export function createBashBackgroundController(): BashBackgroundController {
+	let current: BashBackgroundHandle | undefined;
+	return {
+		register: () => {
+			let requested = false;
+			let resolveDetach: () => void = () => {};
+			let settleOutcome: (outcome: BashBackgroundOutcome) => void = () => {};
+			const handle: BashBackgroundHandle = {
+				request: () => {
+					requested = true;
+					resolveDetach();
+				},
+				detach: new Promise<void>((resolve) => {
+					resolveDetach = resolve;
+				}),
+				requested: () => requested,
+				settle: (outcome) => {
+					// Releasing the slot here keeps Alt+G pointing at the next command, not a finished one.
+					if (current === handle) current = undefined;
+					settleOutcome(outcome);
+				},
+				outcome: new Promise<BashBackgroundOutcome>((resolve) => {
+					settleOutcome = resolve;
+				}),
+			};
+			current = handle;
+			return handle;
+		},
+		request: async () => {
+			if (!current) return { status: "no-command" };
+			current.request();
+			return current.outcome;
+		},
+	};
 }
 
 export type BashRenderState = {
@@ -302,6 +407,8 @@ export function createShellToolDefinition(
 				ctx,
 			);
 			const output = new OutputAccumulator({ tempFilePrefix: config.tempFilePrefix });
+			const background = options?.background?.register();
+			let backgroundSettled = false;
 			let acceptingOutput = true;
 			let updateTimer: NodeJS.Timeout | undefined;
 			let updateDirty = false;
@@ -363,6 +470,11 @@ export function createShellToolDefinition(
 				return snapshot;
 			};
 
+			const settleBackground = (outcome: BashBackgroundOutcome) => {
+				backgroundSettled = true;
+				background?.settle(outcome);
+			};
+
 			const formatOutput = (snapshot: Awaited<ReturnType<typeof finishOutput>>, emptyText = "(no output)") => {
 				const truncation = snapshot.truncation;
 				let text = snapshot.content || emptyText;
@@ -394,8 +506,34 @@ export function createShellToolDefinition(
 						signal,
 						timeout,
 						env: spawnContext.env,
+						detach: background?.detach,
 					});
 					exitCode = result.exitCode;
+					if (result.detached && result.completion) {
+						// Return immediately with the output path; keep draining into the same file
+						// until the child exits, then close it. No exit code is reported after detach.
+						const outputPath = output.persist();
+						settleBackground({ status: "detached", outputPath });
+						const closeDetached = () => {
+							acceptingOutput = false;
+							output.finish();
+							clearUpdateTimer();
+							return output.closeTempFile();
+						};
+						result.completion.then(closeDetached, closeDetached);
+						return {
+							content: [
+								{
+									type: "text",
+									text: `Command detached to background and still running. Combined output is written to ${outputPath}; no exit code will be reported.`,
+								},
+							],
+							details: { fullOutputPath: outputPath },
+						};
+					}
+					if (background) {
+						settleBackground(background.requested() ? { status: "unsupported" } : { status: "exit" });
+					}
 				} catch (err) {
 					const snapshot = await finishOutput();
 					const { text } = formatOutput(snapshot, "");
@@ -442,6 +580,8 @@ export function createShellToolDefinition(
 				return { content: [{ type: "text", text: outputText }], details, structuredContent };
 			} finally {
 				clearUpdateTimer();
+				// Abort, timeout or thrown errors release the slot; a detached run settled earlier.
+				if (background && !backgroundSettled) settleBackground({ status: "exit" });
 			}
 		},
 		...createShellRenderers(config.prompt),
