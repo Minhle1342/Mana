@@ -184,6 +184,10 @@ const APP_KEYBINDINGS = {
 		defaultKeys: "shift+ctrl+o",
 		description: "Tree filter: cycle backward",
 	},
+	"app.bash.background": {
+		defaultKeys: "alt+g",
+		description: "Background the running shell command",
+	},
 } as const satisfies KeybindingDefinitions;
 
 export type AppKeybinding = keyof typeof APP_KEYBINDINGS;

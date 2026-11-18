@@ -3884,6 +3884,7 @@ export class InteractiveMode {
 		);
 		this.defaultEditor.onAction("app.message.followUp", () => this.handleFollowUp());
 		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
+		this.defaultEditor.onAction("app.bash.background", () => void this.handleBackgroundBash());
 		this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
 		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
 		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
@@ -4768,6 +4769,20 @@ export class InteractiveMode {
 	 */
 	private showStatus(message: string): void {
 		this.showStyledStatus(() => theme.fg("dim", message));
+	}
+
+	/** Detach the running shell tool command (Alt+G) and show where its output goes. */
+	private async handleBackgroundBash(): Promise<void> {
+		const outcome = await this.session.backgroundBash();
+		if (outcome.status === "no-command") {
+			this.showStatus("No running shell command to background");
+		} else if (outcome.status === "unsupported") {
+			this.showStatus("This shell backend does not support backgrounding");
+		} else if (outcome.status === "exit") {
+			this.showStatus("The shell command already finished");
+		} else {
+			this.showStatus(`Command backgrounded; output: ${outcome.outputPath}`);
+		}
 	}
 
 	/** Show a status message whose segments carry their own colors, rebuilt on theme changes. */
