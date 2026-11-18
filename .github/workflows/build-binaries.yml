@@ -1,9 +1,9 @@
 name: Build Binaries
 
+# Fork note: publishing here is bound to the upstream repository (npm trusted
+# publishing for the @earendil-works scope and the pi.dev release announcement),
+# so this fork does not run it on tags. Dispatch it manually if needed.
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       tag:

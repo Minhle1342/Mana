@@ -12,11 +12,11 @@ name: Nix
 # Release tags are built exactly as tagged, with their committed pin. Once all
 # systems build, the stable branch is fast-forwarded to the tag so that
 # `nix run github:earendil-works/pi/stable` runs the latest release.
+#
+# Fork note: release tags are not built here; the upstream pin and stable branch
+# belong to earendil-works/pi.
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
   pull_request:
     branches: [main]
     paths:
