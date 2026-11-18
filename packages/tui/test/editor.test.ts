@@ -4579,6 +4579,19 @@ describe("Editor component", () => {
 				assert.ok(editor.getSelectionText().startsWith("line 0\nline 1\n"));
 			});
 
+			it("scrolls its own window on the wheel and keeps the cursor inside it", () => {
+				const width = 40;
+				const editor = new Editor(createTestTUI(width, 24), defaultEditorTheme);
+				editor.setText(Array.from({ length: 232 }, (_, index) => `line ${index}`).join("\n"));
+				editor.render(width);
+				const cursorBefore = editor.getCursor().line;
+
+				editor.handleMouse({ ...mouse("wheel", 0, 1, width), wheelDelta: -5 });
+
+				assert.strictEqual(editor.getCursor().line, cursorBefore - 5);
+				assert.ok(stripTerminalSequences(editor.render(width).join("\n")).includes(`line ${cursorBefore - 5}`));
+			});
+
 			it("highlights the selection through the theme hook", () => {
 				const selectionTheme = { ...defaultEditorTheme, selection: (text: string) => `\x1b[7m${text}\x1b[27m` };
 				const editor = new Editor(createTestTUI(), selectionTheme);
