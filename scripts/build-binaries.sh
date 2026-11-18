@@ -130,9 +130,9 @@ for platform in "${PLATFORMS[@]}"; do
     # standalone binary before pi starts (see #7684). Disable cwd .env autoload so
     # project env files do not leak into pi's environment (see #10473).
     if [[ "$platform" == windows-* ]]; then
-        bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile "$OUTPUT_DIR/$platform/pi.exe"
+        bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile "$OUTPUT_DIR/$platform/mana.exe"
     else
-        bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile "$OUTPUT_DIR/$platform/pi"
+        bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile "$OUTPUT_DIR/$platform/mana"
     fi
 done
 
@@ -170,7 +170,7 @@ for platform in "${PLATFORMS[@]}"; do
     else
         # Unix platforms (tar.gz) - use wrapper directory for mise compatibility
         echo "Creating pi-$platform.tar.gz..."
-        mv "$platform" pi && tar -czf pi-$platform.tar.gz pi && mv pi "$platform"
+        mv "$platform" mana && tar -czf pi-$platform.tar.gz mana && mv mana "$platform"
     fi
 done
 
@@ -181,7 +181,7 @@ for platform in "${PLATFORMS[@]}"; do
     if [[ "$platform" == windows-* ]]; then
         mkdir -p "$platform" && (cd "$platform" && unzip -q ../pi-$platform.zip)
     else
-        tar -xzf pi-$platform.tar.gz && mv pi "$platform"
+        tar -xzf pi-$platform.tar.gz && mv mana "$platform"
     fi
 done
 
@@ -191,10 +191,11 @@ echo "Archives available in $OUTPUT_DIR/"
 ls -lh *.tar.gz *.zip 2>/dev/null || true
 echo ""
 echo "Extracted directories for testing:"
+# Binary name inside the archives follows piConfig.name (see config.ts): the CLI is `mana`.
 for platform in "${PLATFORMS[@]}"; do
     if [[ "$platform" == windows-* ]]; then
-        echo "  $OUTPUT_DIR/$platform/pi.exe"
+        echo "  $OUTPUT_DIR/$platform/mana.exe"
     else
-        echo "  $OUTPUT_DIR/$platform/pi"
+        echo "  $OUTPUT_DIR/$platform/mana"
     fi
 done

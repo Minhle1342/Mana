@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- The CLI is named `mana`: release archives ship a `mana`/`mana.exe` executable, `--help` and usage lines use that name, and the npm bin entry is `mana`. The `~/.pi` config directory, the `PI_*` environment overrides, sessions and stored credentials are unchanged, so existing setups keep working.
+
 ## [1.5.3] - 2026-11-18
 
 ### Added

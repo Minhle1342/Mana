@@ -172,20 +172,20 @@ jobs:
             darwin-arm64|darwin-x64|linux-arm64|linux-x64)
               platform="${runtime_platform}"
               archive="release-assets/pi-${platform}.tar.gz"
-              root="extracted/pi"
-              binary="${root}/pi"
+              root="extracted/mana"
+              binary="${root}/mana"
               ;;
             win32-arm64)
               platform="windows-arm64"
               archive="release-assets/pi-${platform}.zip"
               root="extracted"
-              binary="${root}/pi.exe"
+              binary="${root}/mana.exe"
               ;;
             win32-x64)
               platform="windows-x64"
               archive="release-assets/pi-${platform}.zip"
               root="extracted"
-              binary="${root}/pi.exe"
+              binary="${root}/mana.exe"
               ;;
             *)
               echo "::error::Unsupported runner platform ${runtime_platform}"
