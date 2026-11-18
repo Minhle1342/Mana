@@ -842,7 +842,8 @@ export class Editor implements Component, Focusable {
 		let visualLines = this.buildVisualLineMap(this.lastWidth);
 		if (edge) {
 			const maxScroll = Math.max(0, visualLines.length - visibleLineBudget(this.tui.terminal.rows));
-			this.scrollOffset = edge === "up" ? Math.max(0, this.scrollOffset - 1) : Math.min(maxScroll, this.scrollOffset + 1);
+			this.scrollOffset =
+				edge === "up" ? Math.max(0, this.scrollOffset - 1) : Math.min(maxScroll, this.scrollOffset + 1);
 			visualLines = this.buildVisualLineMap(this.lastWidth);
 		}
 		const pointerY = edge === "up" ? 1 : edge === "down" ? this.renderedVisibleLineCount : event.y;
@@ -2055,7 +2056,8 @@ export class Editor implements Component, Focusable {
 	/** Delete the grapheme or newline at the cursor; false when the cursor is at the end of the draft. */
 	private deleteForwardAtCursor(): boolean {
 		const currentLine = this.state.lines[this.state.cursorLine] || "";
-		if (this.state.cursorCol >= currentLine.length && this.state.cursorLine >= this.state.lines.length - 1) return false;
+		if (this.state.cursorCol >= currentLine.length && this.state.cursorLine >= this.state.lines.length - 1)
+			return false;
 
 		if (this.state.cursorCol < currentLine.length) {
 			this.pushUndoSnapshot();

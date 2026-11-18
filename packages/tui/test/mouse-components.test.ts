@@ -4,9 +4,9 @@ import { Editor, type EditorTheme } from "../src/components/editor.ts";
 import { Input } from "../src/components/input.ts";
 import { SelectList, type SelectListTheme } from "../src/components/select-list.ts";
 import { SettingsList, type SettingsListTheme } from "../src/components/settings-list.ts";
+import { Text } from "../src/components/text.ts";
 import { Container, type TuiMouseEvent, type TuiMouseEventType } from "../src/tui.ts";
 import { TuiAltScreen } from "../src/tui-alt-screen.ts";
-import { Text } from "../src/components/text.ts";
 import { VirtualTerminal } from "./virtual-terminal.ts";
 
 function mouse(type: TuiMouseEventType, x: number, y: number, width = 80, height = 10): TuiMouseEvent {
