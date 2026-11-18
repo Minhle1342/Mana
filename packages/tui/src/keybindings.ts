@@ -29,6 +29,16 @@ export interface Keybindings {
 	"tui.editor.yank": true;
 	"tui.editor.yankPop": true;
 	"tui.editor.undo": true;
+	// Selection: Shift-navigation extends it, Alt+C copies it.
+	"tui.editor.selectCharLeft": true;
+	"tui.editor.selectCharRight": true;
+	"tui.editor.selectUp": true;
+	"tui.editor.selectDown": true;
+	"tui.editor.selectLineStart": true;
+	"tui.editor.selectLineEnd": true;
+	"tui.editor.selectPageUp": true;
+	"tui.editor.selectPageDown": true;
+	"tui.editor.copySelection": true;
 	// Generic input actions
 	"tui.input.newLine": true;
 	"tui.input.submit": true;
@@ -140,6 +150,15 @@ export const TUI_KEYBINDINGS = {
 	"tui.editor.yank": { defaultKeys: "ctrl+y", description: "Yank" },
 	"tui.editor.yankPop": { defaultKeys: "alt+y", description: "Yank pop" },
 	"tui.editor.undo": { defaultKeys: "ctrl+-", description: "Undo" },
+	"tui.editor.selectCharLeft": { defaultKeys: "shift+left", description: "Extend selection left" },
+	"tui.editor.selectCharRight": { defaultKeys: "shift+right", description: "Extend selection right" },
+	"tui.editor.selectUp": { defaultKeys: "shift+up", description: "Extend selection up" },
+	"tui.editor.selectDown": { defaultKeys: "shift+down", description: "Extend selection down" },
+	"tui.editor.selectLineStart": { defaultKeys: "shift+home", description: "Extend selection to line start" },
+	"tui.editor.selectLineEnd": { defaultKeys: "shift+end", description: "Extend selection to line end" },
+	"tui.editor.selectPageUp": { defaultKeys: "shift+pageUp", description: "Extend selection up a page" },
+	"tui.editor.selectPageDown": { defaultKeys: "shift+pageDown", description: "Extend selection down a page" },
+	"tui.editor.copySelection": { defaultKeys: "alt+c", description: "Copy the editor selection" },
 	"tui.input.newLine": { defaultKeys: ["shift+enter", "ctrl+j"], description: "Insert newline" },
 	"tui.input.submit": { defaultKeys: "enter", description: "Submit input" },
 	"tui.input.tab": { defaultKeys: "tab", description: "Tab / autocomplete" },

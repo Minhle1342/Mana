@@ -1096,6 +1096,7 @@ export function getEditorTheme(): EditorTheme {
 	return {
 		borderColor: (text: string) => theme.fg("borderMuted", text),
 		selectList: getSelectListTheme(),
+		selection: (text: string) => theme.inverse(text),
 	};
 }
 

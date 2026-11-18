@@ -81,6 +81,22 @@ The dedicated history actions browse prompt history regardless of cursor positio
 | `tui.editor.yankPop` | `alt+y` | Cycle through deleted text after yank |
 | `tui.editor.undo` | `ctrl+-` (`ctrl+z` on Windows; `alt+z` on WSL) | Undo last edit |
 
+#### Selection
+
+Shift-navigation and a mouse drag inside the prompt bar build an editor selection. `Backspace`, `Delete`, typing, and paste replace the whole selection in one undo step. A drag that starts outside the editor rows keeps using the fullscreen screen selection. `ctrl+a` still moves to the line start and `ctrl+c` still clears the draft.
+
+| Keybinding id | Default | Description |
+|---|---|---|
+| `tui.editor.selectCharLeft` | `shift+left` | Extend selection left |
+| `tui.editor.selectCharRight` | `shift+right` | Extend selection right |
+| `tui.editor.selectUp` | `shift+up` | Extend selection up |
+| `tui.editor.selectDown` | `shift+down` | Extend selection down |
+| `tui.editor.selectLineStart` | `shift+home` | Extend selection to line start |
+| `tui.editor.selectLineEnd` | `shift+end` | Extend selection to line end |
+| `tui.editor.selectPageUp` | `shift+pageUp` | Extend selection up one page |
+| `tui.editor.selectPageDown` | `shift+pageDown` | Extend selection down one page |
+| `tui.editor.copySelection` | `alt+c` | Copy the editor selection |
+
 #### Input and selection
 
 | Keybinding id | Default | Description |

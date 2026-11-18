@@ -77,3 +77,48 @@ describe("CustomEditor selection page keybindings", () => {
 		expect(pastes).toBe(1);
 	});
 });
+
+describe("CustomEditor copy-selection keybinding", () => {
+	function createEditor(): CustomEditor {
+		const keybindings = new KeybindingsManager();
+		setKeybindings(keybindings);
+		return new CustomEditor(new TuiMainScreen(new VirtualTerminal()), defaultEditorTheme, keybindings);
+	}
+
+	it("wires Alt+C to a clipboard callback by default", () => {
+		expect(typeof createEditor().onCopySelection).toBe("function");
+	});
+
+	it("copies the selection on Alt+C and drops the highlight", () => {
+		const editor = createEditor();
+		const copied: string[] = [];
+		editor.onCopySelection = (text) => copied.push(text);
+		editor.setText("hello world");
+		for (let index = 0; index < 5; index++) editor.handleInput("\x1b[d"); // Shift+Left
+		expect(editor.getSelectionText()).toBe("world");
+
+		editor.handleInput("\x1bc"); // Alt+C
+
+		expect(copied).toEqual(["world"]);
+		expect(editor.getSelectionText()).toBe("");
+		expect(editor.getText()).toBe("hello world");
+	});
+
+	it("leaves Alt+C a no-op without a selection and Ctrl+C to the app", () => {
+		const editor = createEditor();
+		const copied: string[] = [];
+		editor.onCopySelection = (text) => copied.push(text);
+		let clears = 0;
+		editor.onAction("app.clear", () => {
+			clears++;
+		});
+		editor.setText("hello world");
+
+		editor.handleInput("\x1bc"); // Alt+C without a selection
+		expect(copied).toEqual([]);
+		expect(editor.getText()).toBe("hello world");
+
+		editor.handleInput("\x03"); // Ctrl+C stays the app's clear
+		expect(clears).toBe(1);
+	});
+});

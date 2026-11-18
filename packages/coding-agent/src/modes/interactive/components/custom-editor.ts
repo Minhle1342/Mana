@@ -1,5 +1,6 @@
 import { Editor, type EditorOptions, type EditorTheme, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import type { AppKeybinding, KeybindingsManager } from "../../../core/keybindings.ts";
+import { copyToClipboard } from "../../../utils/clipboard.ts";
 import type { StatusIndicator } from "./status-indicator.ts";
 
 export type CustomEditorOptions = EditorOptions & {
@@ -27,6 +28,11 @@ export class CustomEditor extends Editor {
 		super(tui, theme, options);
 		this.keybindings = keybindings;
 		this.embedWorkingStatus = options?.embedWorkingStatus ?? false;
+		// Alt+C copies the editor selection; a clipboard failure is best effort and stays silent
+		// because the editor has already dropped the highlight by the time this runs.
+		this.onCopySelection = (text: string) => {
+			void copyToClipboard(text).catch(() => {});
+		};
 	}
 
 	setWorkingStatusIndicator(indicator: StatusIndicator | undefined): void {

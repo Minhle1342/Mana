@@ -6,7 +6,14 @@ import { describe, it } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { type AutocompleteProvider, CombinedAutocompleteProvider } from "../src/autocomplete.ts";
 import { Editor, wordWrapLine } from "../src/components/editor.ts";
-import { FAKE_CURSOR_END, FAKE_CURSOR_START, renderFakeCursor, type TUI } from "../src/tui.ts";
+import {
+	FAKE_CURSOR_END,
+	FAKE_CURSOR_START,
+	renderFakeCursor,
+	type TUI,
+	type TuiMouseEvent,
+	type TuiMouseEventType,
+} from "../src/tui.ts";
 import { TuiMainScreen } from "../src/tui-main-screen.ts";
 import { stripTerminalSequences, visibleWidth } from "../src/utils.ts";
 import { defaultEditorTheme } from "./test-themes.ts";
@@ -4484,5 +4491,127 @@ describe("Editor component", () => {
 			assert.strictEqual(visibleWidth(hintLine), 10);
 			assert.ok(stripTerminalSequences(hintLine).trimEnd().length < "Ask anything… Enter to send".length);
 		});
+	describe("Selection", () => {
+		const SHIFT_UP = "\x1b[a";
+		const SHIFT_LEFT = "\x1b[d";
+		const UNDO = "\x1b[45;5u";
+
+		function mouse(type: TuiMouseEventType, x: number, y: number, width = 80, height = 24): TuiMouseEvent {
+			return {
+				type,
+				button: "left",
+				x,
+				y,
+				screenX: x,
+				screenY: y,
+				width,
+				height,
+				shift: false,
+				alt: false,
+				ctrl: false,
+				...(type === "click" ? { clickCount: 1 } : {}),
+			};
+		}
+
+		it("deletes a Shift-made selection with one Backspace and restores it with one undo", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			editor.setText("hello world");
+			for (let index = 0; index < 6; index++) editor.handleInput(SHIFT_LEFT);
+			assert.strictEqual(editor.getSelectionText(), " world");
+
+			editor.handleInput("\x7f"); // Backspace
+
+			assert.strictEqual(editor.getText(), "hello");
+			editor.handleInput(UNDO);
+			assert.strictEqual(editor.getText(), "hello world");
+		});
+
+		it("typing and paste replace the selection as one undo unit", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			editor.setText("hello world");
+			for (let index = 0; index < 5; index++) editor.handleInput(SHIFT_LEFT);
+			assert.strictEqual(editor.getSelectionText(), "world");
+
+			editor.handleInput("X");
+			assert.strictEqual(editor.getText(), "hello X");
+			editor.handleInput(UNDO);
+			assert.strictEqual(editor.getText(), "hello world");
+
+			const pasting = new Editor(createTestTUI(), defaultEditorTheme);
+			pasting.setText("hello world");
+			for (let index = 0; index < 5; index++) pasting.handleInput(SHIFT_LEFT);
+			pasting.handleInput("\x1b[200~pasted\x1b[201~");
+			assert.strictEqual(pasting.getText(), "hello pasted");
+			pasting.handleInput(UNDO);
+			assert.strictEqual(pasting.getText(), "hello world");
+		});
+
+		it("extends upward across wrapped lines and brings the window with the head", () => {
+			const width = 12;
+			const editor = new Editor(createTestTUI(width, 8), defaultEditorTheme);
+			const lines = Array.from({ length: 30 }, (_, index) => `line ${index} padded`);
+			editor.setText(lines.join("\n"));
+			editor.handleInput("\x01"); // Ctrl+A - line start
+
+			for (let index = 0; index < 40; index++) editor.handleInput(SHIFT_UP);
+
+			assert.deepStrictEqual(editor.getCursor(), { line: 0, col: 0 });
+			assert.strictEqual(editor.getSelectionText(), `${lines.slice(0, 29).join("\n")}\n`);
+			// The wrapped window follows the head back to the top of the draft.
+			assert.ok(stripTerminalSequences(editor.render(width).join("\n")).includes("line 0"));
+		});
+
+		it("captures a drag and selects up to the top of a 232-line draft", () => {
+			const width = 40;
+			const editor = new Editor(createTestTUI(width, 24), defaultEditorTheme);
+			editor.setText(Array.from({ length: 232 }, (_, index) => `line ${index}`).join("\n"));
+			editor.render(width);
+
+			// Row 7 is the last content row of a 24-row terminal (30% of 24, clamped to rows - 2).
+			const press = editor.handleMouse(mouse("press", 0, 7, width));
+			assert.strictEqual(press?.capture, true);
+
+			// Dragging above the content rows scrolls one line per event and extends the head.
+			const drag = mouse("drag", 0, 0, width);
+			for (let index = 0; index < 260; index++) editor.handleMouse(drag);
+
+			assert.ok(editor.getSelectionText().startsWith("line 0\nline 1\n"));
+		});
+
+		it("highlights the selection through the theme hook", () => {
+			const selectionTheme = { ...defaultEditorTheme, selection: (text: string) => `\x1b[7m${text}\x1b[27m` };
+			const editor = new Editor(createTestTUI(), selectionTheme);
+			editor.setText("hello world");
+			for (let index = 0; index < 6; index++) editor.handleInput(SHIFT_LEFT);
+
+			const contentLine = editor.render(80)[1]!;
+
+			assert.ok(contentLine.includes("\x1b[7m"));
+			assert.strictEqual(stripTerminalSequences(contentLine).trimEnd(), "hello world");
+		});
+
+		it("keeps render-rewriting editors square and legible with a selection active", () => {
+			// Extension editors map over super.render() lines to recolor text and redraw borders.
+			class RewritingEditor extends Editor {
+				render(width: number): string[] {
+					const lines = super.render(width);
+					return lines.map((line, index) =>
+						index === 0 ? line : line.replace("hello", "\x1b[31mhello\x1b[39m"),
+					);
+				}
+			}
+			const width = 20;
+			const editor = new RewritingEditor(createTestTUI(width), defaultEditorTheme);
+			editor.setText("hello world");
+			for (let index = 0; index < 5; index++) editor.handleInput(SHIFT_LEFT);
+
+			const lines = editor.render(width);
+
+			for (const line of lines) {
+				assert.strictEqual(visibleWidth(line), width, `line overflows width: ${JSON.stringify(line)}`);
+			}
+			assert.strictEqual(stripTerminalSequences(lines[1]!).trimEnd(), "hello world");
+		});
+	});
 	});
 });

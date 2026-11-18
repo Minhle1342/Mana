@@ -6,6 +6,7 @@ import { SelectList, type SelectListTheme } from "../src/components/select-list.
 import { SettingsList, type SettingsListTheme } from "../src/components/settings-list.ts";
 import { Container, type TuiMouseEvent, type TuiMouseEventType } from "../src/tui.ts";
 import { TuiAltScreen } from "../src/tui-alt-screen.ts";
+import { Text } from "../src/components/text.ts";
 import { VirtualTerminal } from "./virtual-terminal.ts";
 
 function mouse(type: TuiMouseEventType, x: number, y: number, width = 80, height = 10): TuiMouseEvent {
@@ -283,7 +284,7 @@ describe("mouse-aware components", () => {
 		tui.stop();
 	});
 
-	it("selects and copies editor text on drag instead of moving the cursor", async () => {
+	it("selects editor text on drag and copies it only on Alt+C", async () => {
 		const terminal = new VirtualTerminal(20, 6);
 		const copied: string[] = [];
 		const tui = new TuiAltScreen(terminal, undefined, undefined, {
@@ -294,18 +295,48 @@ describe("mouse-aware components", () => {
 		});
 		const editor = new Editor(tui, editorTheme);
 		editor.setText("hello world");
+		editor.onCopySelection = (text) => copied.push(text);
 		tui.addChild(editor);
 		tui.start();
 		await terminal.waitForRender();
-		const cursorBefore = editor.getCursor();
 
+		// Press on the first content row, drag right, release: this builds an editor selection.
 		terminal.sendInput("\x1b[<0;1;2M");
-		terminal.sendInput("\x1b[<32;5;2M");
-		terminal.sendInput("\x1b[<0;5;2m");
+		terminal.sendInput("\x1b[<32;6;2M");
+		terminal.sendInput("\x1b[<0;6;2m");
+		await terminal.waitForRender();
+
+		assert.deepStrictEqual(copied, []);
+		assert.strictEqual(editor.getSelectionText(), "hello");
+
+		terminal.sendInput("\x1bc"); // Alt+C
 		await terminal.waitForRender();
 
 		assert.deepStrictEqual(copied, ["hello"]);
-		assert.deepStrictEqual(editor.getCursor(), cursorBefore);
+		assert.strictEqual(editor.getSelectionText(), "");
+		tui.stop();
+	});
+
+	it("still copies screen text on drag outside the editor rows", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const copied: string[] = [];
+		const tui = new TuiAltScreen(terminal, undefined, undefined, {
+			copySelection: async (text) => {
+				copied.push(text);
+				return true;
+			},
+		});
+		tui.addChild(new Text("hello world", 0, 0));
+		tui.addChild(new Editor(tui, editorTheme));
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[<32;6;1M");
+		terminal.sendInput("\x1b[<0;6;1m");
+		await terminal.waitForRender();
+
+		assert.deepStrictEqual(copied, ["hello"]);
 		tui.stop();
 	});
 });
