@@ -45,6 +45,8 @@ export class CheckpointManager {
 	private readonly checkpointOrder: string[];
 	private readonly reverts: Map<string, string>;
 	private latestRevertId: string | undefined;
+	/** Opaque session position paired with the latest revert; the manager never interprets it. */
+	private latestRevertLeafId: string | undefined;
 
 	constructor(cwd: string, sessionId: string) {
 		this.cwd = cwd;
@@ -53,6 +55,7 @@ export class CheckpointManager {
 		this.checkpointOrder = [];
 		this.reverts = new Map();
 		this.latestRevertId = undefined;
+		this.latestRevertLeafId = undefined;
 	}
 
 	private sanitizeId(id: string): string {
@@ -254,7 +257,7 @@ export class CheckpointManager {
 		};
 	}
 
-	async undoToCheckpoint(turnId?: string | number): Promise<CheckpointUndoResult> {
+	async undoToCheckpoint(turnId?: string | number, leafId?: string): Promise<CheckpointUndoResult> {
 		const cp = await this.findCheckpoint(turnId);
 		if (!cp) throw new Error("No checkpoint found for undo");
 
@@ -300,6 +303,7 @@ export class CheckpointManager {
 		const revertId = `revert_${Date.now()}`;
 		this.reverts.set(revertId, revertRef);
 		this.latestRevertId = revertId;
+		this.latestRevertLeafId = leafId;
 
 		const run = await this.git(["update-ref", `${this.revertRefNamespace()}/${revertId}`, revertRef]);
 		if (run.code !== 0) {
@@ -315,6 +319,11 @@ export class CheckpointManager {
 			return run.stdout.trim();
 		}
 		return undefined;
+	}
+
+	/** Session position recorded with the latest undo, for the caller's `/revert`. */
+	getRevertLeafId(): string | undefined {
+		return this.latestRevertLeafId;
 	}
 
 	async revertUndo(revertId?: string): Promise<CheckpointRevertResult> {
@@ -336,6 +345,7 @@ export class CheckpointManager {
 		this.reverts.delete(targetId);
 		if (this.latestRevertId === targetId) {
 			this.latestRevertId = undefined;
+			this.latestRevertLeafId = undefined;
 		}
 
 		await this.git(["update-ref", "-d", `${this.revertRefNamespace()}/${targetId}`]).catch(() => {});
@@ -349,6 +359,7 @@ export class CheckpointManager {
 		this.reverts.delete(targetId);
 		if (this.latestRevertId === targetId) {
 			this.latestRevertId = undefined;
+			this.latestRevertLeafId = undefined;
 		}
 
 		await this.git(["update-ref", "-d", `${this.revertRefNamespace()}/${targetId}`]).catch(() => {});

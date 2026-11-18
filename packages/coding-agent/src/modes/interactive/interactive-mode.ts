@@ -4107,7 +4107,15 @@ export class InteractiveMode {
 					return;
 				}
 				const arg = text.startsWith("/undo ") ? text.slice(6).trim() : undefined;
-				await this.executeUndo(arg);
+				const turn = arg ? Number(arg) : undefined;
+				const target = this.findUserTurnEntry(turn);
+				if (!target) {
+					this.showWarning(
+						turn === undefined ? "No user turn to undo." : `No user message found for turn ${arg}.`,
+					);
+					return;
+				}
+				await this.executeUndo(target.turn, target.entryId);
 				return;
 			}
 			if (text === "/revert") {
@@ -4125,11 +4133,29 @@ export class InteractiveMode {
 					return;
 				}
 				this.clearStatusIndicator();
+				const leafId = this.session.checkpointManager.getRevertLeafId();
 				try {
 					await this.session.checkpointManager.revertUndo();
-					this.showStatus("Reverted undo: code changes restored.");
 				} catch (error: unknown) {
 					this.showError(`Failed to revert: ${error instanceof Error ? error.message : String(error)}`);
+					return;
+				}
+				if (!leafId) {
+					this.showStatus("Reverted undo: code changes restored.");
+					return;
+				}
+				try {
+					const navigation = await this.session.navigateTree(leafId, { summarize: false });
+					if (navigation.cancelled) {
+						this.showWarning("Restored code changes, but the conversation was not moved forward.");
+						return;
+					}
+					this.applyTreeNavigation(navigation);
+					this.showStatus("Reverted undo: code changes and conversation restored.");
+				} catch (error: unknown) {
+					this.showWarning(
+						`Restored code changes, but moving the conversation forward failed: ${error instanceof Error ? error.message : String(error)}`,
+					);
 				}
 				return;
 			}
@@ -4693,13 +4719,63 @@ export class InteractiveMode {
 		return undefined;
 	}
 
-	private async executeUndo(turnId?: string | number): Promise<void> {
+	/** User-message entry for a turn on the active branch; the last user turn when `turn` is omitted. */
+	private findUserTurnEntry(turn?: number): { entryId: string; turn: number } | undefined {
+		let found: { entryId: string; turn: number } | undefined;
+		let count = 0;
+		for (const entry of this.sessionManager.getBranch()) {
+			if (entry.type !== "message" || entry.message.role !== "user") continue;
+			count++;
+			if (turn === undefined || count === turn) found = { entryId: entry.id, turn: count };
+		}
+		return found;
+	}
+
+	/** Show a session position returned by `navigateTree`: re-render the chat and refill an empty editor. */
+	private applyTreeNavigation(result: { editorText?: string }): void {
+		this.chatContainer.clear();
+		this.renderInitialMessages();
+		if (result.editorText && !this.editor.getText().trim()) {
+			this.editor.setText(result.editorText);
+		}
+	}
+
+	/**
+	 * Undo a turn's workspace checkpoint. With `rewindEntryId`, also move the conversation to just
+	 * before that user entry and put its prompt back in the editor.
+	 */
+	private async executeUndo(turnId?: string | number, rewindEntryId?: string): Promise<void> {
 		this.clearStatusIndicator();
 		try {
-			const result = await this.session.checkpointManager.undoToCheckpoint(turnId);
+			const leafId = rewindEntryId ? this.sessionManager.getLeafId() : undefined;
+			const result = await this.session.checkpointManager.undoToCheckpoint(turnId, leafId ?? undefined);
+			const changes = `+${result.revertDeleted} restored, -${result.revertAdded} removed`;
+			if (!rewindEntryId) {
+				this.showStyledStatus(
+					() =>
+						`${theme.fg("dim", "Undid changes to checkpoint (")}${theme.fg("toolDiffAdded", `+${result.revertDeleted} restored`)}, ${theme.fg("toolDiffRemoved", `-${result.revertAdded} removed`)}${theme.fg("dim", "). Use /revert to restore.")}`,
+				);
+				return;
+			}
+			try {
+				const navigation = await this.session.navigateTree(rewindEntryId, { summarize: false });
+				if (navigation.cancelled) {
+					this.showWarning(
+						`Undid checkpoint (${changes}) but the conversation was not moved back. Use /revert to restore.`,
+					);
+					return;
+				}
+				this.applyTreeNavigation(navigation);
+			} catch (error: unknown) {
+				const message = error instanceof Error ? error.message : String(error);
+				this.showWarning(
+					`Undid checkpoint (${changes}) but rewinding the conversation failed: ${message}. Use /revert to restore.`,
+				);
+				return;
+			}
 			this.showStyledStatus(
 				() =>
-					`${theme.fg("dim", "Undid changes to checkpoint (")}${theme.fg("toolDiffAdded", `+${result.revertDeleted} restored`)}, ${theme.fg("toolDiffRemoved", `-${result.revertAdded} removed`)}${theme.fg("dim", "). Use /revert to restore.")}`,
+					`${theme.fg("dim", "Undid checkpoint (")}${theme.fg("toolDiffAdded", `+${result.revertDeleted} restored`)}, ${theme.fg("toolDiffRemoved", `-${result.revertAdded} removed`)}${theme.fg("dim", ") and moved the conversation back. Use /revert to restore.")}`,
 			);
 		} catch (error: unknown) {
 			this.showError(`Failed to undo: ${error instanceof Error ? error.message : String(error)}`);

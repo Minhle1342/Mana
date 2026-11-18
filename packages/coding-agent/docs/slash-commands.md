@@ -28,8 +28,8 @@ Extensions, prompt templates, and skills can add commands. The command menu in P
 | `/fork` | Create a new session from an earlier user message |
 | `/clone` | Duplicate the current session at its current position |
 | `/cd <path>` | Switch to another workspace (working directory) |
-| `/undo [turn]` | Restore workspace changes to the previous checkpoint, or to the checkpoint before a user message you click |
-| `/revert` | Revert the previous undo and restore code changes |
+| `/undo [turn]` | Restore workspace changes to the checkpoint before the last (or Nth) user turn, move the conversation back to just before that turn, and refill the editor with its prompt. Clicking a user message restores workspace changes only |
+| `/revert` | Redo the previous undo: restore the workspace changes and move the conversation forward again |
 | `/tab <new\|close\|switch\|next\|prev\|list>` | Manage session tabs (concurrent multi-tab sessions) |
 | `/compact [instructions]` | Compact the current context, optionally with custom instructions |
 | `/import <path>` | Import a JSONL session, preserving its ID and working directory |

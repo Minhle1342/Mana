@@ -50,11 +50,12 @@ describe("CheckpointManager", () => {
 			expect(diff.added).toBe(1);
 			expect(diff.deleted).toBe(2);
 
-			// Execute undo
-			const undoResult = await manager.undoToCheckpoint(1);
+			// Execute undo, recording the session position the caller can redo to
+			const undoResult = await manager.undoToCheckpoint(1, "leaf-a");
 			expect(undoResult.revertId).toBeTruthy();
 			expect(undoResult.revertAdded).toBe(2);
 			expect(undoResult.revertDeleted).toBe(1);
+			expect(manager.getRevertLeafId()).toBe("leaf-a");
 
 			// File is restored to original state
 			const contentAfterUndo = (await readFile(file, "utf8")).replace(/\r\n/g, "\n");
@@ -63,6 +64,7 @@ describe("CheckpointManager", () => {
 			// Execute revert
 			const revertResult = await manager.revertUndo(undoResult.revertId);
 			expect(revertResult.success).toBe(true);
+			expect(manager.getRevertLeafId()).toBeUndefined();
 
 			// File is restored to modified state
 			const contentAfterRevert = (await readFile(file, "utf8")).replace(/\r\n/g, "\n");
@@ -98,6 +100,26 @@ describe("CheckpointManager", () => {
 			const revertResult = await manager.revertUndo(undoResult.revertId);
 			expect(revertResult.success).toBe(true);
 			expect(existsSync(newFile)).toBe(true);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("clears the recorded redo position when the undo is dismissed", async () => {
+		const directory = await realpath(await mkdtemp(join(tmpdir(), "pi-checkpoint-dismiss-")));
+		try {
+			git(directory, "init", "-q");
+			await writeFile(join(directory, "init.txt"), "hello\n");
+			git(directory, "add", "init.txt");
+			git(directory, "commit", "-q", "-m", "init");
+
+			const manager = new CheckpointManager(directory, "session-dismiss");
+			await manager.createCheckpoint(1);
+			await manager.undoToCheckpoint(1, "leaf-b");
+			expect(manager.getRevertLeafId()).toBe("leaf-b");
+
+			await manager.dismissRevert();
+			expect(manager.getRevertLeafId()).toBeUndefined();
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}

@@ -63,8 +63,10 @@ describe("InteractiveMode click-to-undo", () => {
 		const second: UserMessage = { role: "user", content: "two", timestamp: 2 };
 		const getCheckpointDiff = vi.fn(async () => ({ hasCheckpoint: true, added: 3, deleted: 4 }));
 		const undoToCheckpoint = vi.fn(async () => ({ revertId: "r1", revertAdded: 0, revertDeleted: 0 }));
+		const navigateTree = vi.fn();
 		const instance = createInstance([userEntry("e1", first), userEntry("e2", second)], {
 			checkpointManager: { getCheckpointDiff, undoToCheckpoint },
+			navigateTree,
 		});
 		instance.showExtensionConfirm = vi.fn(async () => true);
 		instance.showStyledStatus = vi.fn();
@@ -74,6 +76,7 @@ describe("InteractiveMode click-to-undo", () => {
 		await instance.showUndoModal(second);
 
 		expect(getCheckpointDiff).toHaveBeenCalledWith(2);
-		expect(undoToCheckpoint).toHaveBeenCalledWith(2);
+		expect(undoToCheckpoint).toHaveBeenCalledWith(2, undefined);
+		expect(navigateTree).not.toHaveBeenCalled();
 	});
 });
