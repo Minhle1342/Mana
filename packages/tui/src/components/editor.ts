@@ -20,6 +20,7 @@ import {
 	getWordSegmenter,
 	isWhitespaceChar,
 	sliceByColumn,
+	truncateToWidth,
 	visibleWidth,
 } from "../utils.ts";
 import { findWordBackward, findWordForward } from "../word-navigation.ts";
@@ -243,6 +244,10 @@ export interface EditorTheme {
 export interface EditorOptions {
 	paddingX?: number;
 	autocompleteMaxVisible?: number;
+	/** Dim hint shown instead of the cursor while the editor is empty. */
+	placeholder?: string;
+	/** Style applied to the placeholder text. */
+	placeholderStyle?: (text: string) => string;
 }
 
 const SLASH_COMMAND_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
@@ -380,6 +385,9 @@ export class Editor implements Component, Focusable {
 	// Undo support
 	private undoStack = new UndoStack<EditorSnapshot>();
 
+	private readonly placeholder: string = "";
+	private readonly placeholderStyle: (text: string) => string = (text) => text;
+
 	public onSubmit?: (text: string) => void;
 	public onChange?: (text: string) => void;
 	public disableSubmit: boolean = false;
@@ -392,6 +400,8 @@ export class Editor implements Component, Focusable {
 		this.paddingX = Number.isFinite(paddingX) ? Math.max(0, Math.floor(paddingX)) : 0;
 		const maxVisible = options.autocompleteMaxVisible ?? 5;
 		this.autocompleteMaxVisible = Number.isFinite(maxVisible) ? Math.max(3, Math.min(20, Math.floor(maxVisible))) : 5;
+		this.placeholder = options.placeholder ?? "";
+		this.placeholderStyle = options.placeholderStyle ?? ((text) => text);
 	}
 
 	/** Set of currently valid paste IDs, for marker-aware segmentation. */
@@ -580,7 +590,23 @@ export class Editor implements Component, Focusable {
 		// autocomplete (e.g. slash-command menu) is visible.
 		const emitCursorMarker = this.focused;
 
+		// The placeholder replaces the empty draft's cursor line without touching layoutText.
+		const showPlaceholder = this.placeholder.length > 0 && this.isEditorEmpty();
+
 		for (const layoutLine of visibleLines) {
+			// The placeholder replaces the empty draft's cursor line without touching layoutText.
+			if (showPlaceholder) {
+				const hint = truncateToWidth(this.placeholder, Math.max(0, contentWidth - 1), "");
+				const atCursor = [...this.segment(hint, "grapheme")][0]?.segment ?? " ";
+				const hintText =
+					(emitCursorMarker ? CURSOR_MARKER : "") +
+					renderFakeCursor(this.placeholderStyle(atCursor)) +
+					this.placeholderStyle(hint.slice(atCursor.length));
+				const hintPadding = " ".repeat(Math.max(0, contentWidth - visibleWidth(hintText)));
+				result.push(`${leftPadding}${hintText}${hintPadding}${rightPadding}`);
+				continue;
+			}
+
 			let displayText = layoutLine.text;
 			let lineVisibleWidth = visibleWidth(layoutLine.text);
 			let cursorInPadding = false;

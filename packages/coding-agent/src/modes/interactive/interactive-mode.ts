@@ -758,6 +758,8 @@ export class InteractiveMode {
 			paddingX: editorPaddingX,
 			autocompleteMaxVisible,
 			embedWorkingStatus: true,
+			placeholder: "Ask anything… Enter to send, Shift+Enter for newline",
+			placeholderStyle: (text: string) => theme.fg("dim", text),
 		});
 		this.editor = this.defaultEditor;
 		this.editorContainer = new Container();

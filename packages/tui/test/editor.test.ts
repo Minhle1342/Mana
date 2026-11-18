@@ -6,7 +6,7 @@ import { describe, it } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { type AutocompleteProvider, CombinedAutocompleteProvider } from "../src/autocomplete.ts";
 import { Editor, wordWrapLine } from "../src/components/editor.ts";
-import { FAKE_CURSOR_START, renderFakeCursor, type TUI } from "../src/tui.ts";
+import { FAKE_CURSOR_END, FAKE_CURSOR_START, renderFakeCursor, type TUI } from "../src/tui.ts";
 import { TuiMainScreen } from "../src/tui-main-screen.ts";
 import { stripTerminalSequences, visibleWidth } from "../src/utils.ts";
 import { defaultEditorTheme } from "./test-themes.ts";
@@ -4445,6 +4445,44 @@ describe("Editor component", () => {
 
 			// 12 content lines plus the two borders.
 			assert.strictEqual(editor.render(40).length, 14);
+		});
+	});
+
+	describe("Placeholder", () => {
+		function placeholderEditor(placeholder: string, width = 40): Editor {
+			return new Editor(createTestTUI(width), defaultEditorTheme, {
+				placeholder,
+				placeholderStyle: (text) => `\x1b[2m${text}\x1b[22m`,
+			});
+		}
+
+		it("shows the dim hint with the cursor on its first grapheme while empty", () => {
+			const editor = placeholderEditor("Ask anything");
+			editor.focused = true;
+
+			const hintLine = editor.render(40)[1]!;
+
+			assert.ok(hintLine.includes("\x1b[2m"), "placeholder is styled");
+			assert.ok(hintLine.includes(`${FAKE_CURSOR_START}\x1b[2mA\x1b[22m${FAKE_CURSOR_END}`), "cursor sits on `A`");
+			assert.strictEqual(stripTerminalSequences(hintLine).trimEnd(), "Ask anything");
+		});
+
+		it("hides the hint after the first keystroke", () => {
+			const editor = placeholderEditor("Ask anything");
+			editor.render(40);
+
+			editor.handleInput("h");
+
+			assert.strictEqual(stripTerminalSequences(editor.render(40)[1]!).trimEnd(), "h");
+		});
+
+		it("truncates the hint to the content width", () => {
+			const editor = placeholderEditor("Ask anything… Enter to send", 10);
+
+			const hintLine = editor.render(10)[1]!;
+
+			assert.strictEqual(visibleWidth(hintLine), 10);
+			assert.ok(stripTerminalSequences(hintLine).trimEnd().length < "Ask anything… Enter to send".length);
 		});
 	});
 });
