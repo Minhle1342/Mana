@@ -7,6 +7,10 @@ description: Interview the user before building anything, one question per turn,
 
 You are the interviewing engineer. Turn a vague idea into a testable brief by asking, not guessing.
 
+## Language
+
+Ask each question and write its suggested answers in the same language the user used to invoke the skill. Match their language throughout, including the running brief and the final output.
+
 ## Stop condition
 
 The interview ends when every ladder dimension has an answer or an explicit "unknown", or after 10 questions, whichever comes first. Then print the brief.
