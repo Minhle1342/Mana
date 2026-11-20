@@ -29,7 +29,9 @@ export function suiteFiles(): SuiteFile[] {
 		["draft7", "7"],
 	] as const) {
 		for (const path of jsonFiles(join(root, "tests", dir))) {
-			const name = relative(join(root, "tests"), path).replace(/\.json$/, "");
+			const name = relative(join(root, "tests"), path)
+				.replaceAll("\\", "/")
+				.replace(/\.json$/, "");
 			files.push({ name, draft, groups: JSON.parse(readFileSync(path, "utf8")) });
 		}
 	}
