@@ -18,6 +18,7 @@ import type {
 import { registerFauxProvider, streamSimple } from "@earendil-works/pi-ai/compat";
 import { AgentSession, type AgentSessionEvent } from "../../src/core/agent-session.ts";
 import { AuthStorage } from "../../src/core/auth-storage.ts";
+import type { CheckpointManager } from "../../src/core/checkpoint-manager.ts";
 import type { ExtensionRunner, ExtensionUIContext } from "../../src/core/extensions/index.ts";
 import { convertToLlm } from "../../src/core/messages.ts";
 import { SessionManager } from "../../src/core/session-manager.ts";
@@ -122,6 +123,8 @@ export interface HarnessOptions {
 	modelsJson?: Record<string, unknown>;
 	/** Session to continue, for example to test a resume. Default: a new in-memory session. */
 	sessionManager?: SessionManager;
+	/** Replaces the git-backed checkpoint manager, for example to observe when a turn's snapshot settles. */
+	checkpointManager?: CheckpointManager;
 }
 
 export interface Harness {
@@ -244,6 +247,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		allowedToolNames: options.allowedToolNames,
 		excludedToolNames: options.excludedToolNames,
 		extensionRunnerRef,
+		checkpointManager: options.checkpointManager,
 	});
 
 	const events: AgentSessionEvent[] = [];
@@ -271,7 +275,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 			session.dispose();
 			fauxProvider.unregister();
 			if (existsSync(tempDir)) {
-				rmSync(tempDir, { recursive: true });
+				rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 			}
 		},
 	};

@@ -538,6 +538,7 @@ export class AgentSession {
 	private _modelRuntime: ModelRuntime;
 	private _cacheWarmer?: Pick<CacheWarmer, "cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed">;
 	private _checkpointManager: CheckpointManager;
+	private _checkpointPromise?: Promise<string | null>;
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -766,6 +767,9 @@ export class AgentSession {
 		{ toolCall, args }: BeforeToolCallContext,
 		parentToolCallId?: string,
 	): Promise<BeforeToolCallResult | undefined> {
+		if (this._checkpointPromise) {
+			await this._checkpointPromise;
+		}
 		const runner = this._extensionRunner;
 		if (!runner.hasHandlers("tool_call")) {
 			return undefined;
@@ -2011,12 +2015,12 @@ export class AgentSession {
 	private async _startRun(trigger: BeforeAgentStartTrigger, onStarted?: () => void): Promise<void> {
 		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
+		let checkpointTurn: number | undefined;
 		if (trigger.messageType === "user") {
 			// Count on the branch, not the compaction-aware context: checkpoint ids must survive compaction.
-			const turnIndex =
+			checkpointTurn =
 				this.sessionManager.getBranch().filter((entry) => entry.type === "message" && entry.message.role === "user")
 					.length + 1;
-			await this._checkpointManager.createCheckpoint(turnIndex).catch(() => {});
 		}
 		let messages: AgentMessage[];
 		try {
@@ -2041,6 +2045,12 @@ export class AgentSession {
 		// are dropped, so a tool that never registers does not stay pending.
 		this._pendingToolNames.clear();
 		try {
+			// Start the snapshot here, after `before_agent_start` ran, so it captures the tree the first request
+			// starts from; it still runs while that request is in flight. Assigning it inside this try means the
+			// `finally` below settles it on every path.
+			if (checkpointTurn !== undefined) {
+				this._checkpointPromise = this._checkpointManager.createCheckpoint(checkpointTurn).catch(() => null);
+			}
 			await this.agent.prompt(messages);
 			while (!this._agentRunAbortRequested) {
 				if (await this._handlePostAgentRun()) {
@@ -2053,6 +2063,10 @@ export class AgentSession {
 				await this.agent.continue();
 			}
 		} finally {
+			if (this._checkpointPromise) {
+				await this._checkpointPromise;
+				this._checkpointPromise = undefined;
+			}
 			if (this._agentRunAbortRequested) this._finishCancelledRetry();
 			this._failedResponse = undefined;
 			this._runSystemPromptOptions = undefined;
