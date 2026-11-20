@@ -534,7 +534,6 @@ export function createSubagentExtension(
 				if (requests.length === 0) return reply("spawnGroup needs agents.", {}, true);
 				if (requests.length > MAX_GROUP_AGENTS)
 					return reply(`A group takes at most ${MAX_GROUP_AGENTS} agents.`, {}, true);
-				const origin = await originOf(api, context);
 				const resolved: ChildRequest[] = [];
 				const names = new Set<string>();
 				for (const request of requests) {
@@ -578,7 +577,6 @@ export function createSubagentExtension(
 							parent: api.conversationId,
 							message: request.message,
 							followUp: false,
-							...(origin === "owner" ? { origin } : {}),
 						};
 						const reporter = await tx.createTask(Reporter, input, background);
 						state.reporters[`${api.taskId}:${request.name}`] = reporter;

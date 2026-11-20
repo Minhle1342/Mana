@@ -28,7 +28,7 @@ test("checkpoint diff, undo, and revert restore modified code accurately", async
 		git(directory, "commit", "-q", "-m", "init");
 
 		const env = new NodeExecutionEnv({ cwd: directory });
-		const workspace = new Workspace(env, [], 1);
+		const workspace = new Workspace(env, 1);
 
 		// Turn 1 starts: create checkpoint before agent edits
 		await workspace.createCheckpoint(1, context);
@@ -75,7 +75,7 @@ test("checkpoint handles newly created untracked files across undo and revert", 
 		git(directory, "commit", "-q", "-m", "init");
 
 		const env = new NodeExecutionEnv({ cwd: directory });
-		const workspace = new Workspace(env, [], 2);
+		const workspace = new Workspace(env, 2);
 
 		// Checkpoint before turn 2
 		await workspace.createCheckpoint(2, context);
@@ -119,7 +119,7 @@ test("no checkpoint: getCheckpointDiff reports hasCheckpoint false", async () =>
 		git(directory, "commit", "-q", "-m", "init");
 
 		const env = new NodeExecutionEnv({ cwd: directory });
-		const workspace = new Workspace(env, [], 1);
+		const workspace = new Workspace(env, 1);
 
 		const diff = await workspace.getCheckpointDiff({ entryId: 1 }, context);
 		assert.equal(diff.hasCheckpoint, false);
@@ -139,7 +139,7 @@ test("no checkpoint: undoToCheckpoint throws", async () => {
 		git(directory, "commit", "-q", "-m", "init");
 
 		const env = new NodeExecutionEnv({ cwd: directory });
-		const workspace = new Workspace(env, [], 1);
+		const workspace = new Workspace(env, 1);
 
 		await assert.rejects(workspace.undoToCheckpoint({ entryId: 1 }, context), /No checkpoint found for undo/);
 	} finally {
@@ -157,7 +157,7 @@ test("checkpoint survives re-read from git ref (simulated restart)", async () =>
 		git(directory, "commit", "-q", "-m", "init");
 
 		const env = new NodeExecutionEnv({ cwd: directory });
-		const workspace = new Workspace(env, [], 1);
+		const workspace = new Workspace(env, 1);
 
 		// Create checkpoint in one workspace instance
 		await workspace.createCheckpoint(1, context);
@@ -167,7 +167,7 @@ test("checkpoint survives re-read from git ref (simulated restart)", async () =>
 
 		// New workspace instance simulates worker restart: in-memory map is empty,
 		// but the ref persists in git so findCheckpoint reads it back.
-		const workspace2 = new Workspace(env, [], 1);
+		const workspace2 = new Workspace(env, 1);
 		const diff = await workspace2.getCheckpointDiff({ entryId: 1 }, context);
 		assert.equal(diff.hasCheckpoint, true);
 		assert.equal(diff.deleted, 1, "one line was changed after checkpoint");
@@ -187,7 +187,7 @@ test("non-git workspace: createCheckpoint records nothing instead of failing", a
 	try {
 		await writeFile(join(directory, "file.txt"), "hello\n");
 		const env = new NodeExecutionEnv({ cwd: directory });
-		const workspace = new Workspace(env, [], 1);
+		const workspace = new Workspace(env, 1);
 
 		assert.equal(await workspace.createCheckpoint(1, context), undefined);
 		assert.deepEqual(await workspace.getCheckpointDiff({ entryId: 1 }, context), {

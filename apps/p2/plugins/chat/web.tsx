@@ -1918,7 +1918,6 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 																	</RevealEntry.Provider>
 																</UndoCheckpointContext.Provider>
 															</BranchFrom.Provider>
-															</BranchFrom.Provider>
 														</ReplyTo.Provider>
 													</OpenTerminal.Provider>
 												</OpenWorkspaceFile.Provider>

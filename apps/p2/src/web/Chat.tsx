@@ -45,7 +45,7 @@ import {
 	UndoIcon,
 	UsersIcon,
 } from "./icons.tsx";
-import { useLongPress } from "./long-press.ts";
+import { type LongPressHandlers, useLongPress } from "./long-press.ts";
 import { Markdown } from "./Markdown.tsx";
 import { RowEstimator, type RowFeatures } from "./row-estimate.ts";
 import { Time } from "./Time.tsx";
@@ -188,7 +188,10 @@ export function jumpToEntry(entryId: number): boolean {
  * How to start a reply to one message: a button that shows on hover (hidden for coarse pointers), and a long press on
  * touch screens. Nothing when replies are off or the item has no entry yet.
  */
-function useReply(entryId: number | undefined, name: string) {
+function useReply(
+	entryId: number | undefined,
+	name: string,
+): { button: ReactNode; gesture: Partial<LongPressHandlers> } {
 	const reply = useContext(ReplyTo);
 	const press = useLongPress(() => {
 		if (reply && entryId !== undefined) reply({ entryId, name });
