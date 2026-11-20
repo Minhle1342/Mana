@@ -150,12 +150,13 @@ The MCP resource tools (`list_mcp_resources`, `list_mcp_resource_templates`, `re
 | `find` | Find paths using glob patterns |
 | `ls` | List directory contents |
 
-Built-in extensions add two more tools. They are off by default; the MCP extension turns them on when an MCP server needs them (see [MCP](mcp.md#control-tool-exposure)). To enable them yourself, name them in `--tools` or `defaultTools`.
+Built-in extensions add three more tools. `codemode` and `tool_search` are off by default; the MCP extension turns them on when an MCP server needs them (see [MCP](mcp.md#control-tool-exposure)), and naming one in `--tools` or `defaultTools` enables it. `web_search` is on by default: it needs no credential and contacts only its search endpoint when the model calls it. Remove it with `--tools -web_search`, `--exclude-tools web_search`, or `-builtin:web-search`.
 
 | Built-in extension | Purpose |
 |---|---|
 | `codemode` | Run JavaScript that calls the other tools, for example in parallel with `Promise.allSettled`; only the script's output reaches the model |
 | `tool_search` | Search tools that are not declared to the model (`codemode` and `deferred` exposure, such as MCP tools) and declare the matches for the next call |
+| `web_search` | Search the web and return result titles, URLs, and snippets; results are untrusted web text and their pages are not fetched |
 
 ### Enable codemode
 
