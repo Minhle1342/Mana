@@ -1,6 +1,3 @@
-import { chmodSync } from "node:fs";
-import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import {
 	type AcceptsTable,
 	contribute,
@@ -10,101 +7,55 @@ import {
 	isGuest,
 	isOwner,
 	isWorker,
+	query,
+	Session,
 } from "@p2/app/v1";
-import { Hosts, Server, WorkerInitValues } from "@p2/app/v1/server";
-import { Catalog, type Session } from "../sessions/contract.ts";
+import { Hosts, WorkerInitValues } from "@p2/app/v1/server";
+import { ChildRows } from "./children.ts";
 import { type Child, ChildStore, Subagents } from "./contract.ts";
 
-/** The children as version 2 knew them: without their state, which is live and never stored. */
-const withoutState = (children: Record<string, Child[]>): Record<string, Omit<Child, "state">[]> =>
-	Object.fromEntries(
-		Object.entries(children).map(([session, list]) => [session, list.map(({ state: _state, ...child }) => child)]),
-	);
+/** The most sessions whose children stay live (a live query needs a bound): every session, as the catalog's. */
+const WINDOW = 100_000;
 
-/** Version 2 of `ChildStore`: a child's metadata without its state. */
-const CHILD_STORE_ACCEPTS: AcceptsTable<typeof ChildStore> = {
-	2: {
-		state: { children: (current) => withoutState(current) },
-		methods: { report: { args: (old) => old } },
-	},
-};
-
-/** Version 2 of `Subagents`: the children without their state. */
+/** `Subagents` 2: pages read children without their time and failure; workers report them without. */
 const SUBAGENTS_ACCEPTS: AcceptsTable<typeof Subagents> = {
 	2: {
-		state: { reader: { children: (current) => withoutState(current) } },
+		state: {
+			reader: {
+				children: (children) =>
+					Object.fromEntries(
+						Object.entries(children).map(([session, list]) => [
+							session,
+							list.map(({ updatedAt: _updatedAt, failure: _failure, state: _state, ...child }) => child),
+						]),
+					),
+			},
+		},
 		methods: { report: { args: (old) => old } },
 	},
 };
 
-/** A child as an older version stored it: its own cwd without the environment. */
-type StoredChild = Child & { cwd?: string };
-
-/**
- * A stored child in the current form: an own cwd stored before locations existed is on the session's environment (a
- * session could not change machines while it had subagents with their own cwd).
- */
-function placed({ cwd, ...child }: StoredChild, session: Session | undefined): Child {
-	if (cwd === undefined || child.location !== undefined) return child;
-	return { ...child, location: { cwd, env: session?.env ?? null } };
-}
+/** A child as a guest sees it: its failure without the detail. */
+const withoutDetail = (child: Child): Child =>
+	child.failure?.detail === undefined ? child : { ...child, failure: { reason: child.failure.reason } };
 
 export default defineFacet((host) => {
-	host.serve(
-		ChildStore,
-		(_params, self) => {
-			const server = self.get(Server, {});
-			const hosts = self.get(Hosts, {});
-			const catalog = self.get(Catalog, {});
-			// Every session's children, read when the database opens: rows stored with an own cwd (version 1) are placed, and
-			// saved so, at that first read.
-			const children = self.writable<Record<string, Child[]>>({});
-			const dbResource = self.open(
-				async () => {
-					const path = join(server.info.value.dataDir, "subagents.sqlite");
-					const db = new DatabaseSync(path);
-					chmodSync(path, 0o600);
-					db.exec(
-						"PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS children(session TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;",
-					);
-					const sessions = new Map(catalog.sessions.value.map((session) => [session.id, session]));
-					const read: Record<string, Child[]> = {};
-					for (const row of db.prepare("SELECT session,value FROM children").all()) {
-						const session = String(row.session);
-						const stored = JSON.parse(String(row.value)) as StoredChild[];
-						read[session] = stored.map((child) => placed(child, sessions.get(session)));
-						if (stored.some((child) => child.cwd !== undefined))
-							db.prepare("UPDATE children SET value=? WHERE session=?").run(
-								JSON.stringify(read[session]),
-								session,
-							);
-					}
-					children.set(read);
-					return db;
-				},
-				(db) => db.close(),
-			);
-			const save = (session: string, saved: readonly Child[]): void => {
-				// The state is live: it changes with every report, so it is not stored.
-				dbResource.value
-					.prepare(
-						"INSERT INTO children(session,value) VALUES(?,?) ON CONFLICT(session) DO UPDATE SET value=excluded.value",
-					)
-					.run(session, JSON.stringify(saved.map(({ state: _state, ...child }) => child)));
-			};
-			return {
-				children: deriveTyped(self, [children], ([value]) => value),
-				report: async ({ session, generation, children: reported }) => {
-					const worker = hosts.workers.value[session];
-					if (!worker?.running || worker.generation !== generation) return null;
-					save(session, reported);
-					children.set({ ...children.value, [session]: reported });
-					return null;
-				},
-			};
-		},
-		{ accepts: CHILD_STORE_ACCEPTS },
-	);
+	host.serve(ChildStore, (_params, self) => {
+		const hosts = self.get(Hosts, {});
+		const table = self.table(ChildRows);
+		const rows = self.query(table, query(ChildRows), WINDOW);
+		return {
+			children: deriveTyped(self, [rows], ([value]) =>
+				Object.fromEntries(value.map((row) => [row.session.params.id, row.children])),
+			),
+			report: async ({ session, generation, children: reported }, ctx) => {
+				const worker = hosts.workers.value[session];
+				if (!worker?.running || worker.generation !== generation) return null;
+				await self.tx((tx) => tx.put(table, { session: Session({ id: session }), children: reported }), ctx);
+				return null;
+			},
+		};
+	});
 
 	// A worker places own cwds stored before locations existed on the environment recorded here.
 	contribute(host, "p2.subagents-init", (self) => {
@@ -132,8 +83,14 @@ export default defineFacet((host) => {
 				};
 			}
 			if (isGuest(principal)) {
+				// A failure's reason, never its detail (an error's text: paths, stacks), as status keeps the worker's error.
 				const children = deriveTyped(self, [store.children], ([value]) =>
-					Object.fromEntries(Object.keys(principal.sessions).map((session) => [session, value[session] ?? []])),
+					Object.fromEntries(
+						Object.keys(principal.sessions).map((session) => [
+							session,
+							(value[session] ?? []).map(withoutDetail),
+						]),
+					),
 				);
 				return { variant: "reader", members: { children } };
 			}
