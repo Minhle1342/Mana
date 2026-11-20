@@ -13,6 +13,7 @@ import {
 import { clampThinkingLevel } from "../models.ts";
 import type {
 	AssistantMessage,
+	FetchFunction,
 	ImageContent,
 	Model,
 	StopReason,
@@ -592,7 +593,145 @@ export function resolveIncompleteJsonStopReason(output: AssistantMessage): StopR
 		return "toolUse";
 	}
 	if (output.rawStopReason) {
-		return mapStopReasonString(output.rawStopReason);
+		// Wire input: Google's finish reasons are an open set, and mapStopReason throws on one it does not
+		// know. This is a recovery path, so an unknown reason reports a clean stop rather than losing the
+		// text and tool calls already received.
+		try {
+			return mapStopReason(output.rawStopReason as FinishReason);
+		} catch {
+			return "stop";
+		}
 	}
 	return "stop";
+}
+
+/**
+ * Sanitizes an incoming SSE stream before it is consumed by the Google SDK.
+ *
+ * @google/genai requires delimiters ('\n\n', '\r\r', '\r\n\r\n') to process events.
+ * If the server terminates the stream with a single '\n' on a valid JSON chunk, or with
+ * trailing SSE comments (e.g. ": keep-alive\n") or whitespace without double newlines,
+ * the SDK's internal buffer fails to split them and throws "Incomplete JSON segment at the end".
+ *
+ * This transformer passes chunks through with zero buffering latency, while keeping track
+ * of unconsumed trailing characters. On stream completion (done: true), if the trailing buffer
+ * is a comment or a complete JSON event missing its delimiter, it enqueues "\n\n" to complete
+ * the event boundary so @google/genai parses or discards it cleanly.
+ */
+/** Past this many tracked characters only the end is kept: a gateway that sends only comments must not grow it. */
+const TRAILING_LIMIT = 64 * 1024;
+const TRAILING_KEEP = 8 * 1024;
+
+export function sanitizeGoogleSseStream(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+	const reader = body.getReader();
+	const decoder = new TextDecoder("utf-8");
+	const encoder = new TextEncoder();
+	let trailing = "";
+
+	return new ReadableStream<Uint8Array>({
+		async pull(controller) {
+			const { done, value } = await reader.read();
+			if (done) {
+				const trimmed = trailing.trim();
+				if (trimmed.length > 0) {
+					if (trimmed.startsWith(":") || !trimmed.startsWith("data:")) {
+						controller.enqueue(encoder.encode("\n\n"));
+					} else {
+						const payload = trimmed.slice(5).trim();
+						let isCompleteJson = false;
+						try {
+							JSON.parse(payload);
+							isCompleteJson = true;
+						} catch {
+							isCompleteJson = false;
+						}
+						if (isCompleteJson) {
+							controller.enqueue(encoder.encode("\n\n"));
+						}
+					}
+				}
+				controller.close();
+				return;
+			}
+
+			controller.enqueue(value);
+			trailing += decoder.decode(value, { stream: true });
+
+			const delimiters = ["\n\n", "\r\r", "\r\n\r\n"];
+			let lastIdx = -1;
+			let delimLen = 0;
+			for (const d of delimiters) {
+				const idx = trailing.lastIndexOf(d);
+				if (idx > lastIdx) {
+					lastIdx = idx;
+					delimLen = d.length;
+				}
+			}
+			if (lastIdx !== -1) {
+				trailing = trailing.substring(lastIdx + delimLen);
+			}
+			// The decision at stream end only reads the tail, so dropping the rest keeps the buffer bounded.
+			if (trailing.length > TRAILING_LIMIT) {
+				trailing = trailing.slice(-TRAILING_KEEP);
+			}
+		},
+		async cancel(reason) {
+			await reader.cancel(reason);
+		},
+	});
+}
+
+/**
+ * Wraps a fetch function for Google Gen AI to sanitize SSE streaming responses.
+ */
+export function createGoogleFetch(baseFetch?: FetchFunction): FetchFunction {
+	const fetchFn = baseFetch ?? globalThis.fetch;
+	return async (input, init) => {
+		const response = await fetchFn(input, init);
+		if (!response.ok || !response.body) {
+			return response;
+		}
+
+		const contentType = response.headers.get("content-type");
+		const urlString =
+			typeof input === "string"
+				? input
+				: input instanceof URL
+					? input.href
+					: typeof input === "object" && input !== null && "url" in input
+						? (input as { url: string }).url
+						: "";
+
+		const isEventStream =
+			Boolean(contentType?.includes("text/event-stream")) ||
+			Boolean(contentType?.includes("text/plain") && urlString.includes("alt=sse")) ||
+			urlString.includes("alt=sse");
+
+		if (!isEventStream) {
+			return response;
+		}
+
+		const sanitizedBody = sanitizeGoogleSseStream(response.body);
+
+		return new Proxy(response, {
+			get(target, prop) {
+				if (prop === "body") {
+					return sanitizedBody;
+				}
+				const val = Reflect.get(target, prop, target);
+				return typeof val === "function" ? val.bind(target) : val;
+			},
+		});
+	};
+}
+
+/**
+ * Determines whether a failed Google stream can be safely retried: true when the attempt emitted no
+ * text and no tool call, so a retry cannot repeat anything the model already received. Thinking
+ * content does not count, which is what lets a stream that drops during its thinking phase retry.
+ */
+export function canRetryGoogleStream(output: AssistantMessage): boolean {
+	const hasToolCalls = output.content.some((b) => b.type === "toolCall");
+	const hasText = output.content.some((b) => b.type === "text" && b.text.trim().length > 0);
+	return !hasToolCalls && !hasText;
 }

@@ -156,10 +156,13 @@ describe("google-vertex api key resolution", () => {
 		await stream.result();
 
 		expect(googleGenAiMock.constructorCalls).toHaveLength(1);
-		expect(googleGenAiMock.constructorCalls[0]?.httpOptions).toEqual({
-			fetch: globalThis.fetch,
+		expect(googleGenAiMock.constructorCalls[0]?.httpOptions).toMatchObject({
 			headers: { "User-Agent": PI_USER_AGENT },
 		});
+		// A fetch is always passed so the SDK does not install its own dispatcher; it wraps globalThis.fetch
+		// to sanitize streamed responses.
+		const httpOptions = googleGenAiMock.constructorCalls[0]?.httpOptions as { fetch?: unknown } | undefined;
+		expect(typeof httpOptions?.fetch).toBe("function");
 	});
 
 	it("lets explicit headers override the default User-Agent", async () => {
@@ -172,10 +175,11 @@ describe("google-vertex api key resolution", () => {
 		await stream.result();
 
 		expect(googleGenAiMock.constructorCalls).toHaveLength(1);
-		expect(googleGenAiMock.constructorCalls[0]?.httpOptions).toEqual({
-			fetch: globalThis.fetch,
+		expect(googleGenAiMock.constructorCalls[0]?.httpOptions).toMatchObject({
 			headers: { "User-Agent": "custom-agent" },
 		});
+		const httpOptions = googleGenAiMock.constructorCalls[0]?.httpOptions as { fetch?: unknown } | undefined;
+		expect(typeof httpOptions?.fetch).toBe("function");
 	});
 
 	it("forwards custom baseUrl to the ADC client", async () => {

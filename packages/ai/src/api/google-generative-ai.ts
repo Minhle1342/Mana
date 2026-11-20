@@ -33,8 +33,10 @@ import { collapseSystemMessages, getCurrentTools, getInitialSystemMessage } from
 import type { GoogleApiThinkingLevel, ResolvedGoogleThinkingLevel } from "./google-shared.ts";
 import {
 	canRecoverFromIncompleteJsonError,
+	canRetryGoogleStream,
 	convertMessages,
 	convertTools,
+	createGoogleFetch,
 	getDisabledGoogleThinkingConfig,
 	isThinkingPart,
 	mapStopReason,
@@ -260,6 +262,10 @@ export const stream: StreamFunction<"google-generative-ai", GoogleOptions> = (
 							calculateCost(model, output.usage);
 						}
 					}
+
+					if (output.stopReason === "pending") {
+						throw new Error("Google stream ended without a finish reason");
+					}
 					break;
 				} catch (err) {
 					if (canRecoverFromIncompleteJsonError(err, output)) {
@@ -268,8 +274,14 @@ export const stream: StreamFunction<"google-generative-ai", GoogleOptions> = (
 						}
 						break;
 					}
-					if (output.content.length === 0 && attempt < maxRetries && !options?.signal?.aborted) {
+					if (canRetryGoogleStream(output) && attempt < maxRetries && !options?.signal?.aborted) {
+						// The attempt is discarded whole: leftover content, response id, and stop reason would
+						// otherwise be reported for a stream that never produced them.
+						output.content.length = 0;
 						output.responseId = undefined;
+						output.stopReason = "pending";
+						output.rawStopReason = undefined;
+						currentBlock = null;
 						continue;
 					}
 					throw err;
@@ -378,7 +390,7 @@ function createClient(
 ): GoogleGenAI {
 	// Always pass fetch: without one, @google/genai adds a per-request dispatcher that disables
 	// undici's header and body timeouts, bypassing the idle timeouts of the global dispatcher.
-	const httpOptions: HttpOptions = { fetch: fetch ?? globalThis.fetch };
+	const httpOptions: HttpOptions = { fetch: createGoogleFetch(fetch) };
 	if (model.baseUrl) {
 		httpOptions.baseUrl = model.baseUrl;
 		httpOptions.apiVersion = ""; // baseUrl already includes version path, don't append
