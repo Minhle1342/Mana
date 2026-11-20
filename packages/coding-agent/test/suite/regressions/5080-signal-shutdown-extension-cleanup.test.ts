@@ -20,6 +20,8 @@ type ShutdownThis = {
 	isShuttingDown: boolean;
 	unregisterSignalHandlers: () => void;
 	runtimeHost: { dispose: () => Promise<void> };
+	tabManager: { getAllTabs: () => ReadonlyArray<{ runtime: { dispose: () => Promise<void> } }> };
+	saveTabState: () => void;
 	ui: { terminal: { drainInput: (ms: number) => Promise<void> } };
 	themeController: { disableAutoSync: () => void };
 	stop: () => void;
@@ -73,14 +75,18 @@ function restoreStdoutIsTTY(): void {
 }
 
 function createContext(order: string[], sessionManager = createSessionManager()): ShutdownThis {
+	const runtime = {
+		dispose: vi.fn(async () => {
+			order.push("dispose");
+		}),
+	};
 	return {
 		isShuttingDown: false,
 		unregisterSignalHandlers: vi.fn(),
-		runtimeHost: {
-			dispose: vi.fn(async () => {
-				order.push("dispose");
-			}),
-		},
+		runtimeHost: runtime,
+		// Tab 1's runtime is the same object as `runtimeHost`, as it is in a live instance.
+		tabManager: { getAllTabs: () => [{ runtime }] },
+		saveTabState: vi.fn(),
 		ui: {
 			terminal: {
 				drainInput: vi.fn(async () => {

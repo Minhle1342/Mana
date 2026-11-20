@@ -274,7 +274,7 @@ class BuiltInHeader extends ExpandableText {
 	onLogoClick: ((column: number, row: number) => void) | undefined;
 	backdrop: StartupBackdrop | undefined;
 
-	override render(width: number): string[] {
+	override render(width: number): readonly string[] {
 		const lines = super.render(width);
 		return this.backdrop ? this.backdrop.composite(width, lines) : lines;
 	}
@@ -560,7 +560,6 @@ function getDroppedReasoning(message: AssistantMessage): DroppedReasoning | unde
 		return { diagnostic: kind, count: dropped.length, reasons: [...reasons] };
 	}
 	return undefined;
-}
 }
 
 export class InteractiveMode {
@@ -1192,7 +1191,7 @@ export class InteractiveMode {
 
 		// Mount the initial layout: start screen when the active session is empty,
 		// otherwise the normal tab bar + transcript + dock layout.
-		this.syncStartScreen();
+		this.syncStartScreen?.();
 		// Accept text while startup completes, but only enable interrupt, exit, and submission feedback.
 		this.defaultEditor.onAction("app.clear", () => this.handleCtrlC());
 		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
@@ -2417,7 +2416,7 @@ export class InteractiveMode {
 		await this.updateAvailableProviderCount();
 		this.updateEditorBorderColor();
 		this.updateTerminalTitle();
-		this.syncStartScreen();
+		this.syncStartScreen?.();
 	}
 
 	private configureTabRuntime(runtime: AgentSessionRuntime, tabId: string): void {
@@ -2809,7 +2808,7 @@ export class InteractiveMode {
 			requestRender: () => this.ui.requestRender(),
 			addInputListener: (listener) => this.ui.addInputListener(listener),
 		});
-		this.syncStartScreen();
+		this.syncStartScreen?.();
 	}
 
 	/** Whether the start screen should be shown for the active tab (empty, not streaming, in fullscreen mode). */

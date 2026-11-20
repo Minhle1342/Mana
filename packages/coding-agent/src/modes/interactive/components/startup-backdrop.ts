@@ -65,7 +65,7 @@ export class StartupBackdrop {
 	}
 
 	/** Foreground lines with the background visible to their right, staying within `width`. */
-	composite(width: number, foreground: string[]): string[] {
+	composite(width: number, foreground: readonly string[]): readonly string[] {
 		const background = this.render(width, foreground.length);
 		if (!background) return foreground;
 		return foreground.map((line, index) => {
